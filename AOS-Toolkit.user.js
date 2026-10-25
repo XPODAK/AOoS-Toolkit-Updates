@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.9.0
-// @description  Factory Planner, Expansion Advisor, Mining Optimizer and approved logistics (CZ)
+// @version      0.10.0
+// @description  Market Assistant, Factory Planner, Expansion Advisor and approved logistics (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
 // @updateURL    https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.meta.js
@@ -1151,6 +1151,119 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
   }
   return {state,refresh,calculate,edit,invalidate,cancel};
 }
+// Read-only depth quotes and a finite, base-recipe material basket.
+function marketFeeBps(text){
+  const s=String(text??'').trim().replace(',','.');if(!s)return null;
+  if(!/^(?:\d{1,2}|100)(?:\.\d{1,2})?$/.test(s))throw Error('Poplatek musí být procento od 0 do 100 s nejvýše dvěma desetinnými místy.');
+  const [whole,part='']=s.split('.'),bps=Number(whole)*100+Number(part.padEnd(2,'0'));if(bps>10000)throw Error('Poplatek překračuje 100 %.');return bps;
+}
+function normalizeMarketBook(body,id,rules,at){
+  if(body?.item!==id||body.unchanged||!Array.isArray(body.asks)||!Array.isArray(body.bids))throw Error('Chybí úplný formát knihy položky '+id);
+  const now=Date.parse(at);if(!Number.isFinite(now))throw Error('Neplatný čas snímku trhu.');
+  let own=0,expired=0;
+  const normalize=(list,side)=>{
+    if(list.length>10000)throw Error('Kniha překračuje limit 10 000 objednávek.');const seen=new Set(),out=[];
+    for(const o of list){
+      if(!o||typeof o.id!=='string'||!o.id||seen.has(o.id)||typeof o.mine!=='boolean')throw Error('Neznámé vlastnictví nebo ID objednávky.');seen.add(o.id);
+      if(o.mine){own++;continue}
+      if(rules.unitsProblem(o.units)||rules.priceProblem(o.price))throw Error('Neplatná cena nebo objem objednávky.');
+      if(o.minVolume!==undefined&&o.minVolume!==null&&(!Number.isSafeInteger(o.minVolume)||o.minVolume<1||o.minVolume>rules.LIMITS.units))throw Error('Neplatný minimální odběr.');
+      if(o.expires!==null&&o.expires!==undefined){const expiry=Date.parse(o.expires);if(!Number.isFinite(expiry))throw Error('Neplatná expirace objednávky.');if(expiry<=now){expired++;continue}}
+      out.push({id:o.id,units:o.units,price:o.price,minVolume:o.minVolume??1,...(typeof o.at==='string'?{at:o.at}:typeof o.issued==='string'?{issued:o.issued}:{})});
+    }
+    return rules.sortBook(out,side);
+  };
+  const asks=normalize(body.asks,'sell'),bids=normalize(body.bids,'buy');
+  return {item:id,at,asks,bids,own,expired,limited:body.truncated===true||body.more===true};
+}
+function marketDepthQuote(book,quantity,side,rules,bps=null,limit=null){
+  if(!Number.isSafeInteger(quantity)||quantity<1)throw Error('Množství musí být kladné celé číslo.');
+  if(!['buy','sell'].includes(side))throw Error('Neznámá strana trhu.');
+  if(limit!==null&&rules.priceProblem(limit))throw Error('Neplatný cenový limit.');
+  if(bps!==null&&(!Number.isInteger(bps)||bps<0||bps>10000))throw Error('Neplatný scénář poplatku.');
+  if(!book)return {known:false,quantity,side,reason:'Kniha není ověřená.'};
+  const q=rules.walk(side==='buy'?book.asks:book.bids,quantity,limit,side);
+  if(!Number.isSafeInteger(q.cents)||!Number.isSafeInteger(q.units)||q.cents<0||q.units<0||q.units>quantity)throw Error('Cena překročila přesný číselný rozsah.');
+  const fee=bps===null?null:Number((BigInt(q.cents)*BigInt(bps)+9999n)/10000n);
+  const total=fee===null?null:side==='buy'?q.cents+fee:q.cents-fee;
+  if(total!==null&&!Number.isSafeInteger(total))throw Error('Cena s poplatkem překročila přesný rozsah.');
+  return {known:true,quantity,side,filled:q.units,missing:quantity-q.units,full:q.units===quantity&&!book.limited,limited:book.limited,
+    gross:q.cents,average:q.average,best:q.best,worst:q.worst,fee,total,feeBps:bps,fills:q.fills,at:book.at,singleOrderLimit:quantity>rules.LIMITS.units};
+}
+function buildMarketPlan({catalog,rules,materialPlan,books,targetId,quantity,buyFee='',sellFee='',accountId='',stationId='',me=null,at}){
+  if(!catalog.items[targetId]||!Number.isSafeInteger(quantity)||quantity<1||quantity>1000000)throw Error('Vyber položku a celé množství od 1 do 1 000 000.');
+  const buyBps=marketFeeBps(buyFee),sellBps=marketFeeBps(sellFee);
+  const quote=(id,n,side,bps)=>{try{return marketDepthQuote(books[id],n,side,rules,bps)}catch(e){return {known:false,quantity:n,side,reason:String(e.message||e)}}};
+  const buy=quote(targetId,quantity,'buy',buyBps),sell=quote(targetId,quantity,'sell',sellBps);
+  const materials=Object.entries(materialPlan?.rawMissing||{}).map(([id,n])=>({id,name:catalog.items[id]?.n||id,quantity:n,buy:quote(id,n,'buy',buyBps)}));
+  let materialGross=0,materialWithFees=0;
+  const sum=(a,b)=>{const n=a+b;if(!Number.isSafeInteger(n))throw Error('Součet cen překročil přesný rozsah.');return n};
+  for(const row of materials){if(row.buy.known)materialGross=sum(materialGross,row.buy.gross);if(row.buy.total!==null&&row.buy.total!==undefined)materialWithFees=sum(materialWithFees,row.buy.total)}
+  const manufactureKnown=!!materialPlan&&!materialPlan.blocked.length&&materials.every(m=>m.buy.known&&m.buy.full);
+  const manufacture={applicable:!!materialPlan,full:manufactureKnown,materials,crafts:materialPlan?.crafts||[],blocked:materialPlan?.blocked||[],
+    knownGross:materialGross,gross:manufactureKnown?materialGross:null,total:manufactureKnown&&buyBps!==null?materialWithFees:null};
+  const delta=buy.known&&buy.full&&manufactureKnown?buy.gross-materialGross:null;
+  const margin=sell.known&&sell.full&&manufactureKnown?sell.gross-materialGross:null;
+  const netMargin=sell.known&&sell.full&&sell.total!==null&&manufacture.total!==null?sell.total-manufacture.total:null;
+  let station=null,room=null,held=null,balance=null,account=null;
+  if(Array.isArray(me?.stations)){
+    const matches=me.stations.filter(s=>String(s.id)===stationId);if(matches.length===1&&matches[0].mine!==false){station=matches[0];const n=station.stock?.[targetId];
+      // Native market/me stock is sparse; absent keys mean no held units only inside a valid object.
+      if(station.stock&&typeof station.stock==='object'&&!Array.isArray(station.stock)&&(n===undefined||Number.isSafeInteger(n)&&n>=0))held=n??0;
+      const spec=rules.buildingById(station.building);if(spec&&held!==null){const most=rules.holdLimit(spec,targetId);if(Number.isSafeInteger(most)&&most>=0)room=Math.max(0,most-held)}
+    }
+  }
+  if(accountId&&Array.isArray(me?.payFrom)){const matches=me.payFrom.filter(a=>a.id===accountId);if(matches.length===1&&Number.isSafeInteger(matches[0].balance)&&matches[0].balance>=0){account=matches[0];balance=account.balance}}
+  return {format:1,at,target:{id:targetId,name:catalog.items[targetId].n,quantity},buy,sell,manufacture,
+    comparison:{buyMinusMaterialsGross:delta,saleMinusMaterialsGross:margin,scenarioNetMargin:netMargin},
+    fees:{source:'unverified-user-scenario',buyBps,sellBps,rounding:'ceil per quoted item total; server policy unverified'},
+    eligibility:{station:station?{id:stationId,name:station.label||station.system||stationId}:null,held,room,account:account?{id:account.id,name:account.name}:null,balance,
+      buyRoomFits:room===null||!buy.known||buy.filled===0?null:room>=buy.filled,sellStockFits:held===null||!sell.known||sell.filled===0?null:held>=sell.filled,
+      buyBudgetFits:balance===null||!buy.known||buy.filled===0||buy.total===null?null:balance>=buy.total},
+    warnings:['Ocenění načtené knihy není rezervace ani záruka obchodu. Data se čtou postupně; ceny, zůstatky a objemy se mohou změnit.',
+      'Nákup používá asks, prodej bids; vlastní a expirované objednávky jsou vyloučené. Minimální odběr platí podle nativního walk.',
+      'Bez doloženého rozhraní poplatků nejsou poplatky známé. Volitelná procenta jsou uživatelský scénář, nikoliv ověřená sazba hry.',
+      'Výroba je konečná dávka základních receptů bez bonusů produktivity, času, strojů, výzkumu, energie a dopravy. Sklad není oceněný jako bezplatný vstup.',
+      'Nákupní koš obsahuje všechny raw vstupy; nevybírá automaticky levnější nákup mezivýrobků. Přebytek dávky se neoceňuje jako výnos.',
+      'Marže jsou rozdíl ocenění před dalšími výrobními náklady. Prodej výrobku z budoucí výroby není prodej současné zásoby.',
+      'Kontroly místa, zásob a vybraného platebního účtu platí jen pro cílovou položku a oceněný objem. Neověřují prostor ani rozpočet celého výrobního koše.']};
+}
+function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=>{},now=()=>new Date().toISOString(),delay=ms=>new Promise(r=>setTimeout(r,ms))}){
+  const state={busy:false,error:'',snapshot:null,evidence:null,rules:null,itemId:'iron-ingot',quantity:'100',buyFee:'',sellFee:'',accountId:'',progress:0,total:0};let serial=0;
+  const emit=()=>onChange();
+  function invalidate(notify=true){serial++;state.busy=false;state.error='';state.snapshot=null;state.evidence=null;if(notify)emit()}
+  function cancel(){invalidate(false);state.error='Načítání trhu zrušeno.';emit()}
+  function edit(key,value){if(state.busy||!['itemId','quantity','buyFee','sellFee','accountId'].includes(key))return;if(key==='itemId'||key==='quantity')state.evidence=null;state[key]=value;state.snapshot=null;state.error=''}
+  function target(){const n=String(state.quantity).trim()===''?NaN:Number(state.quantity);if(!catalog.items[state.itemId]||!Number.isSafeInteger(n)||n<1||n>1000000)throw Error('Množství musí být celé číslo od 1 do 1 000 000.');return n}
+  function calculate(){
+    state.snapshot=null;state.error='';
+    try{const n=target(),e=state.evidence;if(!e||!state.rules||e.itemId!==state.itemId||e.quantity!==n)throw Error('Změněný cíl vyžaduje nové načtení knih.');
+      state.snapshot=buildMarketPlan({catalog,rules:state.rules,materialPlan:e.materialPlan,books:e.books,targetId:e.itemId,quantity:n,buyFee:state.buyFee,sellFee:state.sellFee,stationId:e.stationId,accountId:state.accountId,me:e.me,at:e.at});state.snapshot.failures=e.failures;state.snapshot.coverage={loaded:Object.keys(e.books).length,total:e.total};return state.snapshot;
+    }catch(e){state.error=String(e.message||e);return null}finally{emit()}
+  }
+  async function refresh(stationId){
+    if(state.busy)return null;const ticket=++serial;state.busy=true;state.error='';state.snapshot=null;state.evidence=null;state.progress=0;state.total=0;emit();const current=()=>ticket===serial;
+    try{
+      const quantity=target();marketFeeBps(state.buyFee);marketFeeBps(state.sellFee);
+      if(typeof stationId!=='string'||!stationId)throw Error('Vyber vlastní stanici.');
+      const rules=await loadRules();if(!current())return null;
+      const itemId=state.itemId,materialPlan=catalog.items[itemId].c==='raw'?null:planMaterials({[itemId]:quantity},[],rules.RECIPES,catalog);
+      const ids=[...new Set([itemId,...Object.keys(materialPlan?.rawMissing||{})])],books={},failures=[];state.total=ids.length;emit();
+      let me=null;try{me=await api('/api/market/me');if(!current())return null;if(!Array.isArray(me?.stations)||!Array.isArray(me?.payFrom))throw Error('Neplatný formát účtů trhu.')}
+      catch(e){if(!current())return null;me=null;failures.push({id:'market/me',reason:'Platební účet, zásobu a místo nelze ověřit.'})}
+      for(const [index,id] of ids.entries()){
+        if(!current())return null;
+        if(index>=32){failures.push({id,reason:'Limit 32 knih; cena není ověřená.'});continue}
+        try{const body=await api('/api/market/item?id='+encodeURIComponent(id));if(!current())return null;books[id]=normalizeMarketBook(body,id,rules,now())}
+        catch(e){if(!current())return null;failures.push({id,reason:String(e.message||e)})}
+        state.progress++;emit();if(index+1<Math.min(ids.length,32)){await delay(150);if(!current())return null}
+      }
+      if(!current())return null;state.rules=rules;state.evidence={stationId,itemId,quantity,materialPlan,books,me,failures,total:ids.length,at:now()};return calculate();
+    }catch(e){if(current())state.error=String(e.message||e);return null}
+    finally{if(current()){state.busy=false;emit()}}
+  }
+  return {state,refresh,calculate,edit,invalidate,cancel};
+}
   const STORE = 'aos-toolkit.v0.2';
   const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') } catch { return {} } })();
@@ -1181,6 +1294,8 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
     loadRules:async()=>{const [map,world,buildings,mining,deposits,places]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/buildings.js'),import('/src/mining.js'),import('/src/deposits.js'),import('/src/ui/places.js')]);exploredLabel=places.systemText;return {map,world,...buildings,...mining,...deposits,richnessOf:world.richnessOf}}});
   const factoryPlanner=createFactoryPlanner({catalog:GAME,api,productionFlows,onChange:()=>render(),
     loadRules:async()=>{const [production,bay,sim,buildings,research,construct]=await Promise.all([import('/src/production.js'),import('/src/bay.js'),import('/src/baysim.js'),import('/src/buildings.js'),import('/src/research.js'),import('/src/construct.js')]);return {...production,...bay,...sim,...buildings,...research,...construct}}});
+  const marketAssistant=createMarketAssistant({catalog:GAME,api,planMaterials,onChange:()=>render(),
+    loadRules:async()=>{const [market,production,buildings]=await Promise.all([import('/src/market-rules.js'),import('/src/production.js'),import('/src/buildings.js')]);return {...market,RECIPES:production.RECIPES,buildingById:buildings.buildingById,holdLimit:buildings.holdLimit}}});
   let expansionPreparationSerial=0;
   function cancelExpansionWork(){
     expansionPreparationSerial++;const preparing=expansionAdvisor.state.preparing;expansionAdvisor.state.preparing=false;
@@ -1212,7 +1327,7 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.9.0',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.10.0',at:new Date().toISOString(),station:state.stationId,
     requestsOn:state.view?.requestsOn,exportsOn:state.view?.exportsOn,groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -1245,6 +1360,7 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
   }
   async function loadView(own=true){
     if(state.writing || (own && state.processing))return;
+    marketAssistant.invalidate();
     factoryPlanner.invalidate();
     progressAdvisor.invalidate();
     const serial=own?++state.querySerial:state.querySerial;
@@ -1468,7 +1584,7 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
     const warning=proposalWarnings().length?'\n'+proposalWarnings().join('\n'):'';
     if(!confirm(`AOS Toolkit: ${changes.length} změn logistiky na ${stationName} (${stationId}).\n\nZáloha se stáhne jako JSON. Jde o SKUTEČNÉ změny na serveru.${warning}\n\nPokračovat?`))return;
     if(prompt('Pro potvrzení napiš přesně PROVEST:')!=='PROVEST'){state.notice='Zrušeno';render();return}
-    state.processing=true;state.writing=true;factoryPlanner.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.error='';state.serverLog=[];state.notice='Kontroluji aktuální konfiguraci…';render();
+    state.processing=true;state.writing=true;marketAssistant.invalidate();factoryPlanner.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.error='';state.serverLog=[];state.notice='Kontroluji aktuální konfiguraci…';render();
     try{
       const fresh=await api('/api/stations/view?id='+encodeURIComponent(stationId));validateView(fresh,stationId);
       if(configSignature(fresh)!==signature)throw Error('Konfigurace se od náhledu změnila. Obnov detail a zkontroluj nový návrh');
@@ -1501,7 +1617,7 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.9.0',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.10.0',at:new Date().toISOString(),reference:GAME.version,
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -1604,7 +1720,7 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
       ${(d.goal==='production'||d.goal==='profit')?`<label>Výrobek <select id="advisor-item" ${disabled?'disabled':''}>${products}</select></label><label>Počet kusů <input id="advisor-quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity)}" ${disabled?'disabled':''}></label>`:
       `<label>Konkrétní výzkum (volitelně ID z herního seznamu) <input id="advisor-project" maxlength="80" value="${esc(d.projectId)}" placeholder="automatický výběr" ${disabled?'disabled':''}></label>`}
       <label class="tick"><input id="advisor-account" type="checkbox" ${d.includeAccount?'checked':''} ${disabled?'disabled':''}> Zahrnout vlastní další stanice (čerstvé načtení účtu)</label>
-      <button data-advisor="refresh" ${disabled||!state.stationId?'disabled':''}>${d.busy?'Načítám…':'Vyhodnotit další kroky'}</button><button data-advisor="export" ${s?'':'disabled'}>Export plánu</button><button data-advisor="factory">Plánovat výkon výroby</button><button data-advisor="expansion" ${disabled||!state.stationId?'disabled':''}>Najít systém pro cíl</button><button data-advisor="logistics" ${disabled||!s?.target?'disabled':''}>Navrhnout logistiku cíle</button>
+      <button data-advisor="refresh" ${disabled||!state.stationId?'disabled':''}>${d.busy?'Načítám…':'Vyhodnotit další kroky'}</button><button data-advisor="export" ${s?'':'disabled'}>Export plánu</button><button data-advisor="market">Porovnat nákup a výrobu</button><button data-advisor="factory">Plánovat výkon výroby</button><button data-advisor="expansion" ${disabled||!state.stationId?'disabled':''}>Najít systém pro cíl</button><button data-advisor="logistics" ${disabled||!s?.target?'disabled':''}>Navrhnout logistiku cíle</button>
       <p id="advisor-status" role="status" class="${d.error?'err':''}">${esc(d.error||(!state.stationId?'Nejprve načti seznam stanic a vyber stanici.':d.busy?'Načítám data vybrané stanice…':s?'Plán vyhodnocen z načteného snímku.':'Připraveno k vyhodnocení.'))}</p>`)}
       ${s?`<section id="advisor-results">${wrap(`<b>${esc(s.station.name)} · ${esc(ADVISOR_GOALS[s.goal])}</b><p>Stav k ${esc(s.at)}. Systém ${esc(s.station.system)}.</p>
         <p>${s.target?`Nejbližší cíl: <strong>${esc(s.target.name)}</strong>${s.target.kind==='research'?` · ${s.target.scope==='global'?'globální výzkum':'výzkum této stanice'}${s.target.prerequisiteFor?` · předpoklad pro ${esc(s.target.prerequisiteFor)}`:''}`:` · ${fmt(s.target.quantity)} kusů`}`:'Žádný další dostupný výzkum nebyl nalezen. Zvol výrobní cíl nebo zkontroluj dostupná data.'}</p>`)}
@@ -1616,6 +1732,7 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
       ${wrap(`<b>Podklady a omezení</b>${s.warnings.map(w=>`<p>${esc(w)}</p>`).join('')}<p>Stav může po načtení zastarat. Volné planety, výkupní ceny, zůstatek účtu a obsazení galaxie nejsou potvrzené.</p>`)}</section>`:''}`;
   }
   async function advisorAction(name){
+    if(name==='market'){if(['production','profit'].includes(progressAdvisor.state.goal)){marketAssistant.edit('itemId',progressAdvisor.state.itemId);marketAssistant.edit('quantity',String(progressAdvisor.state.quantity))}state.tab='market';render();return}
     if(name==='factory'){if(['production','profit'].includes(progressAdvisor.state.goal))factoryPlanner.edit('itemId',progressAdvisor.state.itemId);state.tab='factory';render();return}
     if(name==='expansion'){await searchGoalExpansion();return}
     if(name==='logistics'){await advisorLogistics();return}
@@ -1649,6 +1766,37 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
     if(name==='export'){if(d.snapshot)download(d.snapshot,'aos-toolkit-factory-plan.json');return}
     if(name==='calculate'){factoryPlanner.calculate();return}
     if(name==='refresh'&&!progressAdvisor.state.busy&&!accountOverview.state.busy)await factoryPlanner.refresh(state.stationId);
+  }
+  function marketMenu(){
+    const d=marketAssistant.state,s=d.snapshot,disabled=d.busy||state.processing||state.writing;
+    const money=c=>c===null||c===undefined?'neověřeno':(c/100).toLocaleString('cs-CZ',{minimumFractionDigits:2,maximumFractionDigits:2})+' CR';
+    const products=Object.entries(GAME.items).sort(([a],[b])=>item(a).localeCompare(item(b))).map(([id])=>`<option value="${esc(id)}" ${d.itemId===id?'selected':''}>${esc(item(id))}</option>`).join('');
+    const accounts=d.evidence?.me?.payFrom||[];
+    const quote=(q,side)=>!q.known?`<p class="warning">${esc(q.reason)}</p>`:`<p>${side==='buy'?'Nákup':'Prodej'}: <strong>${fmt(q.filled)} / ${fmt(q.quantity)} ks</strong> · ${q.full?'pokryto načtenou knihou':'neúplné pokrytí'}.</p><p>${side==='buy'?'Cena':'Výnos'} bez doložených poplatků: ${money(q.gross)}. Průměr ${money(q.average)} / ks. Rozsah ${money(q.best)} až ${money(q.worst)}.</p><p>Poplatek ve scénáři ${money(q.fee)} · ${side==='buy'?'cena včetně':'výnos po'} scénářovém poplatku ${money(q.total)}.</p>${q.missing?`<p class="warning">Chybí protistrana pro ${fmt(q.missing)} ks; zbytek není oceněný průměrnou cenou.</p>`:''}${q.limited?'<p class="warning">API označilo omezenou knihu; úplná cena není potvrzená.</p>':''}<details><summary>Plnění jednotlivých objednávek (${q.fills.length})</summary>${q.fills.slice(0,50).map(f=>`<p>${fmt(f.units)} ks × ${money(f.price)} · ${esc(f.id)}</p>`).join('')}${q.fills.length>50?'<p>UI zobrazuje prvních 50; export obsahuje všechna oceněná plnění.</p>':''}</details>`;
+    const check=v=>v===null?'neověřeno':v?'ano':'ne';
+    return wrap(`<b>Market Assistant · nákup nebo výroba</b><p>Ocenění konkrétního množství přes dostupné protistrany, nikoliv nejnižší cena × počet. Pouze GET čtení; žádný obchod se neodesílá.</p>
+      <label>Položka <select data-market-value="itemId" ${disabled?'disabled':''}>${products}</select></label>
+      <label>Počet kusů <input data-market-value="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity)}" ${disabled?'disabled':''}></label>
+      <label>Nákupní poplatek – scénář % <input data-market-value="buyFee" type="text" inputmode="decimal" maxlength="6" value="${esc(d.buyFee)}" placeholder="neznámý" ${disabled?'disabled':''}></label>
+      <label>Prodejní poplatek – scénář % <input data-market-value="sellFee" type="text" inputmode="decimal" maxlength="6" value="${esc(d.sellFee)}" placeholder="neznámý" ${disabled?'disabled':''}></label>
+      <label>Platební účet pro kontrolu nákupu <select data-market-value="accountId" ${disabled?'disabled':''}><option value="">Neověřovat účet</option>${accounts.map(a=>`<option value="${esc(a.id)}" ${a.id===d.accountId?'selected':''}>${esc(a.name||a.id)}</option>`).join('')}</select></label>
+      <button data-market="refresh" ${disabled||!state.stationId?'disabled':''}>Načíst knihy a porovnat</button><button data-market="calculate" ${disabled||!d.evidence?'disabled':''}>Přepočítat scénář bez sítě</button><button data-market="cancel" ${d.busy?'':'disabled'}>Zrušit</button><button data-market="export" ${s&&!d.busy?'':'disabled'}>Export JSON</button>
+      <p id="market-status" data-busy="${d.busy}" role="status" class="${d.error?'err':''}">${esc(d.error||(d.busy?`Načítám knihy ${d.progress}/${d.total}…`:s?'Oceněno z časově označeného snímku.':'Vyber vlastní stanici a načti trh.'))}</p>`)+
+      (s?`<section id="market-results">${wrap(`<b>${esc(s.target.name)} · ${fmt(s.target.quantity)} ks</b><p>K ${esc(s.at)}. Knihy ${s.coverage.loaded}/${s.coverage.total}.</p>${s.failures.map(f=>`<p class="warning">${esc(f.id)}: ${esc(f.reason)}</p>`).join('')}`)}
+      ${wrap('<b>Přímý nákup · asks</b>'+quote(s.buy,'buy'))}${wrap('<b>Prodej cílového množství · bids</b>'+quote(s.sell,'sell'))}
+      ${s.manufacture.applicable?wrap(`<b>Nákup raw vstupů a vlastní výroba</b><p>${s.manufacture.full?'Všechny potřebné raw vstupy mají pokrytí v načtených knihách.':'Celý koš nemá ověřené pokrytí; částečný součet není cenou výroby.'}</p><p>Známá oceněná část koše: ${money(s.manufacture.knownGross)}. Úplná materiálová cena: ${money(s.manufacture.gross)}; se scénářem nákupních poplatků: ${money(s.manufacture.total)}.</p>
+        <div class="table"><table><thead><tr><th>Vstup</th><th>Potřeba</th><th>Na prodej / chybí</th><th>Oceněná část bez poplatku</th></tr></thead><tbody>${s.manufacture.materials.map(m=>`<tr><td>${esc(m.name)}</td><td>${fmt(m.quantity)}</td><td>${m.buy.known?fmt(m.buy.filled)+' / '+fmt(m.buy.missing):'neověřeno'}</td><td>${m.buy.known?money(m.buy.gross):esc(m.buy.reason)}</td></tr>`).join('')}</tbody></table></div>
+        ${s.manufacture.blocked.map(b=>`<p class="warning">${esc(item(b.resource))}: ${esc(b.reason)}</p>`).join('')}<details><summary>Vyrobit podle základních receptů</summary>${s.manufacture.crafts.map(c=>`<p>${esc(item(c.resource))}: ${fmt(c.amount)} ks, ${fmt(c.batches)} dávek.</p>`).join('')}</details>`):wrap('<p>Surovina nemá výrobní recept; porovnání výrobního koše se nepoužívá.</p>')}
+      ${wrap(`<b>Srovnání ocenění</b><p>Přímý nákup minus raw materiály (před poplatky): ${money(s.comparison.buyMinusMaterialsGross)}. Kladné číslo znamená dražší nákup výrobku.</p><p>Prodej minus raw materiály (před dalšími náklady): ${money(s.comparison.saleMinusMaterialsGross)}. Rozdíl po obou uživatelských poplatcích: ${money(s.comparison.scenarioNetMargin)}.</p><p>Nejde o čistý zisk ani ověřenou arbitráž. Cena času, kapacity, dopravy a rezervace knih není zahrnutá.</p>`)}
+      ${wrap(`<b>Podmínky pro oceněný objem cílové položky</b><p>Stanice: ${esc(s.eligibility.station?.name||'neověřená')}. Zásoba ${s.eligibility.held===null?'neověřeno':fmt(s.eligibility.held)}, místo ${s.eligibility.room===null?'neověřeno':fmt(s.eligibility.room)}.</p><p>Místo pro oceněný nákup: ${check(s.eligibility.buyRoomFits)}. Zásoba pro oceněný prodej: ${check(s.eligibility.sellStockFits)}. Vybraný platební účet pokrývá nákup se scénářem poplatku: ${check(s.eligibility.buyBudgetFits)}.</p><p>Ani splněné podmínky nepředstavují potvrzení obchodu serverem.</p>`)}
+      ${wrap(s.warnings.map(w=>`<p class="warning">${esc(w)}</p>`).join(''))}</section>`:'');
+  }
+  async function marketAction(name){
+    const d=marketAssistant.state;if(name==='cancel'){marketAssistant.cancel();return}
+    if(d.busy||state.processing||state.writing)return;
+    if(name==='export'){if(d.snapshot)download(d.snapshot,'aos-toolkit-market-plan.json');return}
+    if(name==='calculate'){marketAssistant.calculate();return}
+    if(name==='refresh'&&!factoryPlanner.state.busy&&!progressAdvisor.state.busy&&!accountOverview.state.busy)await marketAssistant.refresh(state.stationId);
   }
   function debugMenu(){
     const d=debugTools.state,s=d.snapshot,planet=s?.planets.find(p=>p.letter===d.letter);
@@ -1820,15 +1968,15 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
     if(['loadMining','miningStation','miningMap'].includes(name)){if(!state.writing)await miningOptimizer.refresh(name==='miningStation'?state.view?.station?.system:name==='miningMap'?debugTools.currentSystemId():miningOptimizer.state.input);return}
     if(name==='cancelMining'){miningOptimizer.cancel();return}
     if(name==='recalculateMining'){miningOptimizer.recalculate();return}
-    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'0.9.0',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
+    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'0.10.0',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
     if(name==='scan'){if(!state.writing)await galaxyScanner.search({center:scannerCenter()});return}
     if(name==='cancelScan'){galaxyScanner.cancel();return}
     if(name==='scanPrev'||name==='scanNext'){galaxyScanner.state.page+=name==='scanPrev'?-1:1;renderExplored();return}
-    if(name==='exportScan'){download({version:'0.9.0',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
+    if(name==='exportScan'){download({version:'0.10.0',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
     if(['tabList','tabExpansion','tabScanner','tabMining'].includes(name)){state.exploredTab=name==='tabList'?'list':name==='tabScanner'?'scanner':name==='tabMining'?'mining':'expansion';renderExplored();return}
     if(name==='searchExpansion'){if(expansionAdvisor.state.goalMode==='goal'){await searchGoalExpansion();return}if(!state.writing)await expansionAdvisor.search({originId:state.view?.station?.system||debugTools.currentSystemId()});return}
     if(name==='cancelExpansion'){cancelExpansionWork();renderExplored();return}
-    if(name==='exportExpansion'){download({version:'0.9.0',at:expansionAdvisor.state.at,context:expansionAdvisor.state.context,origin:expansionAdvisor.state.origin,limits:{candidates:expansionAdvisor.state.limited,sites:expansionAdvisor.state.siteLimited},excluded:expansionAdvisor.state.excluded,rows:expansionAdvisor.state.rows},'aos-toolkit-expansion.json');return}
+    if(name==='exportExpansion'){download({version:'0.10.0',at:expansionAdvisor.state.at,context:expansionAdvisor.state.context,origin:expansionAdvisor.state.origin,limits:{candidates:expansionAdvisor.state.limited,sites:expansionAdvisor.state.siteLimited},excluded:expansionAdvisor.state.excluded,rows:expansionAdvisor.state.rows},'aos-toolkit-expansion.json');return}
     if(name==='close'){state.exploredOpened=false;miningOptimizer.cancel();galaxyScanner.cancel();cancelExpansionWork();exploredSystems.cancel();renderExplored();return}
     if(name==='cancel'){exploredSystems.cancel();return}
     if(name==='refresh'){if(!state.writing){invalidateExpansionWork();await exploredSystems.refresh();}return}
@@ -1836,26 +1984,29 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
     if(name==='prev')exploredSystems.state.page--;if(name==='next')exploredSystems.state.page++;renderExplored();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.9.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.10.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
   }
   function render(){
     if(!state.root)return;
+    if(state.opened&&state.tab==='market'&&marketAssistant.state.busy&&state.root.getElementById('panel')?.querySelector('#market-status')?.dataset.busy==='true'){
+      state.root.getElementById('panel').querySelector('#market-status').textContent=`Načítám knihy ${marketAssistant.state.progress}/${marketAssistant.state.total}…`;return;
+    }
     // Keep busy controls alive between pointerdown and cancellation clicks.
     if(state.opened&&state.tab==='factory'&&factoryPlanner.state.busy&&state.root.getElementById('panel')?.querySelector('#factory-status')?.dataset.busy==='true'){
       const status=state.root.getElementById('panel').querySelector('#factory-status');status.textContent=`Načítám vlastní stanici a haly ${factoryPlanner.state.progress}/${factoryPlanner.state.total}…`;return;
     }
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
-    const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['factory','Factory Planner'],['debug','Debug'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.9.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+    const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['factory','Factory Planner'],['market','Trh'],['debug','Debug'],['diag','Diagnostika']];
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.10.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><button data-act="exploredOpen" title="Samostatné okno prozkoumaných systémů">Systémy</button><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
      <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
-     <main>${({summary,resources,galaxy,production,proposals,account:accountMenu,advisor:advisorMenu,factory:factoryMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
+     <main>${({summary,resources,galaxy,production,proposals,account:accountMenu,advisor:advisorMenu,factory:factoryMenu,market:marketMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
      <footer>All Out of Space · ${state.processing?'Probíhá operace':'Připraveno'} <button data-act="exportPlan">Export návrhů</button></footer>`;
     panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;invalidateExpansionWork();galaxyScanner.invalidate();miningOptimizer.invalidate();state.view=null;state.plan=[];state.selected.clear();loadView()});
     panel.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;render()}));
@@ -1876,6 +2027,13 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
     panel.querySelector('#enableWrites')?.addEventListener('change',e=>{if(state.processing)return;settings.enableWrites=e.target.checked;save();render()});
     panel.querySelector('#debug-system')?.addEventListener('input',e=>{debugTools.state.input=e.target.value});
     panel.querySelector('#debug-planet')?.addEventListener('change',e=>{debugTools.state.letter=e.target.value;render()});
+    panel.querySelectorAll('[data-market]').forEach(b=>b.addEventListener('click',()=>marketAction(b.dataset.market)));
+    panel.querySelectorAll('[data-market-value]').forEach(input=>input.addEventListener(input.tagName==='SELECT'?'change':'input',()=>{
+      marketAssistant.edit(input.dataset.marketValue,input.value);panel.querySelector('#market-results')?.setAttribute('hidden','');
+      const status=panel.querySelector('#market-status');if(status)status.textContent='Scénář změněn; přepočítej nebo načti nové knihy.';
+      const exp=panel.querySelector('[data-market="export"]');if(exp)exp.disabled=true;
+      const calc=panel.querySelector('[data-market="calculate"]');if(calc)calc.disabled=!marketAssistant.state.evidence;
+    }));
     panel.querySelectorAll('[data-factory]').forEach(b=>b.addEventListener('click',()=>factoryAction(b.dataset.factory)));
     panel.querySelectorAll('[data-factory-value]').forEach(input=>input.addEventListener(input.tagName==='SELECT'?'change':'input',()=>{
       factoryPlanner.edit(input.dataset.factoryValue,input.value);
@@ -1918,7 +2076,7 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
     if(name==='addRequest'||name==='addExport'){addDraft(name==='addRequest'?'request':'export',state.root?.getElementById('panel')?.querySelector('#draft-item')?.value);render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.9.0',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'0.10.0',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,priority:p.priority,group:p.existing?.group??p.group,risk:p.risk,error:p.error}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -1947,7 +2105,7 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
       main{flex:1;overflow:auto;min-height:120px;padding:11px;overscroll-behavior:contain}.sect{border-bottom:1px solid #294250;padding:6px 0 12px;margin-bottom:8px}.sect>b{display:block;font-size:13px}.sect p{color:#b6cad5;margin:7px 0}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#1b3340;border:1px solid #365666;padding:9px 5px;border-radius:6px;text-align:center}.metric strong{display:block;font-size:21px}.metric small{font-size:10px;color:#b8d3d7}
       .table{overflow:auto;margin:8px 0}.table table{border-collapse:collapse;min-width:440px;width:100%;font-size:11px}.table th,.table td{padding:7px;text-align:left;border-bottom:1px solid #34505c;vertical-align:top}.table th{background:#1e3543;color:#b5e6ed}
       .plan{display:flex;align-items:flex-start;gap:9px;padding:8px 6px;border:1px solid #314f5f;border-radius:7px;margin-top:5px}.plan.same{opacity:.8}.draft-fields{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.draft-fields label{display:grid;gap:3px}.draft-fields input{width:130px}.draft-fields input,.draft-fields select,#draft-item{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:5px;padding:5px;max-width:100%}.info{min-width:0}.plan input{margin-top:3px}.info{flex:1}.info strong{color:#e7f9ff}.info small{display:block;color:#a9c7d2}.info b{color:#fff}.caution{color:#ffcc7b!important}.tick{display:flex;gap:8px;align-items:center;margin:8px 0}.warning{padding:9px;background:#4b3b20;border-radius:7px;color:#ffde9b}.dangerbtn{background:#762b30!important;border-color:#c85656!important}pre{overflow:auto;background:#162f3b;padding:9px}footer{display:flex;justify-content:space-between;align-items:center;font-size:10px;padding:8px 12px;background:#1a303e;color:#b4c8d3}
-      #debug-system,#debug-planet,[id^="advisor-"],#account-filter,[data-factory-value]{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
+      #debug-system,#debug-planet,[id^="advisor-"],#account-filter,[data-factory-value],[data-market-value]{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
       #explored-window{pointer-events:auto;position:fixed;z-index:2;left:25px;top:100px;width:min(800px,calc(100vw - 16px));height:480px;min-width:min(320px,calc(100vw - 16px));min-height:min(260px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);resize:both;overflow:hidden;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #527d8f;border-radius:12px;font:12px/1.45 system-ui;box-shadow:0 15px 45px #000b}
       #explored-window[hidden]{display:none}#explored-window header button{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif}#explored-window .explored-body{flex:1;min-height:80px;overflow:auto;padding:10px}#explored-window .explored-tools{display:flex;flex-wrap:wrap;gap:6px;padding:8px}#explored-window label{display:flex;align-items:center;gap:5px}#explored-window input,#explored-window select{max-width:220px;background:#182e3b;color:#fff;border:1px solid #587080;padding:5px;border-radius:5px}#explored-window button[data-explored],#explored-window .system-link{background:#21586a;color:#e4faff;border:1px solid #3b91a0;border-radius:5px;padding:5px 7px}#explored-window .system-link{text-align:left;text-decoration:underline;background:transparent;border:0;color:#8bdcef;padding:0}#explored-window td small{display:block;color:#afc6d1}#explored-window .tabs button[data-explored]{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:#b5c8d5}#explored-window .tabs button.active{color:#fff;border-bottom-color:#61c2d7}#explored-window button[data-explored-sort]{background:transparent;border:0;color:#b5e6ed;font-weight:bold;padding:0}#explored-window .sect small{display:block;color:#a9c7d2;margin:5px 0}#explored-window header{flex-shrink:0}#explored-window footer{gap:5px}
       #explored-window.minimized{height:auto!important;min-height:0;max-height:none;resize:none}#explored-window.minimized>:not(header){display:none!important}#explored-window header>div:first-child{min-width:0;overflow:hidden}#explored-window header b,#explored-window header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#explored-window .window-controls{display:flex;gap:5px;flex-shrink:0}.scanner-controls{max-height:45%;overflow:auto;flex-shrink:0}.scanner-resources{display:flex;flex-wrap:wrap;gap:6px;padding:8px;max-height:135px;overflow:auto;flex-shrink:0}.scanner-resources label{min-width:140px;font-size:11px}#explored-window [data-scanner-value]{max-width:190px}#explored-window input[type="number"]{width:110px}
@@ -1981,8 +2139,9 @@ function createFactoryPlanner({catalog,api,loadRules,productionFlows,onChange=()
   }
   document.addEventListener('spacefactory:auth',e=>{
     if(e.detail?.profile)return;
-    state.exploredOpened=false;factoryPlanner.invalidate();miningOptimizer.invalidate();galaxyScanner.invalidate();invalidateExpansionWork();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
+    state.exploredOpened=false;marketAssistant.invalidate();factoryPlanner.invalidate();miningOptimizer.invalidate();galaxyScanner.invalidate();invalidateExpansionWork();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
   });
-  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{factoryPlanner.invalidate();exploredSystems.stale();invalidateExpansionWork();galaxyScanner.invalidate();miningOptimizer.invalidate()});
+  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{marketAssistant.invalidate();factoryPlanner.invalidate();exploredSystems.stale();invalidateExpansionWork();galaxyScanner.invalidate();miningOptimizer.invalidate()});
+  for(const event of ['spacefactory:market','spacefactory:wallet'])document.addEventListener(event,()=>marketAssistant.invalidate());
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 })();
