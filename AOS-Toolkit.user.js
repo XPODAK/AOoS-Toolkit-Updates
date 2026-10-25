@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.5.1
+// @version      0.5.2
 // @description  Account overview, network-aware progression advisor, Smart Logistics and client Debug tools (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
@@ -31,10 +31,10 @@ function createDebugTools({catalog,api,getGame,loadWorld,doc,onChange=()=>{},
     if(!v||!finite(v.x)||!finite(v.y)||!finite(v.scale)||v.scale<=0)throw Error('Neplatné souřadnice kamery');
     return {x:v.x,y:v.y,scale:v.scale};
   }
-  function gameCamera(){
+  function gameCamera(allowStation=false){
     const game=getGame();
     if(!game?.starmap||typeof game.starmap.goTo!=='function'||typeof game.starmap.view!=='function'||typeof game.setMapOpen!=='function')throw Error('Rozhraní kamery není dostupné; otevři mapu ve hře.');
-    if(game.stationView?.isOpen)throw Error('Nejprve opusť vnitřek stanice a otevři mapu.');
+    if(game.stationView?.isOpen&&!allowStation)throw Error('Nejprve opusť vnitřek stanice a otevři mapu.');
     if(game.starmap.flying)throw Error('Počkej na dokončení aktuálního letu kamery.');
     return game;
   }
@@ -73,10 +73,19 @@ function createDebugTools({catalog,api,getGame,loadWorld,doc,onChange=()=>{},
   function currentSystemId(){const game=getGame();return game?.sysview?.current?.id||game?.starmap?.selected?.id||''}
   function cameraToSystem(){
     if(!system)throw Error('Nejprve načti systém v inspektoru.');
-    const game=gameCamera();
+    cameraToKnownSystem(system);
+  }
+  function cameraToKnownSystem(targetSystem,{leaveStation=false}={}){
+    if(!targetSystem||typeof targetSystem.id!=='string'||!finite(targetSystem.x)||!finite(targetSystem.y))throw Error('Neplatný systém kamery');
+    const game=gameCamera(leaveStation);
     if(typeof game.sysview?.frameOf!=='function'||typeof game.sysview?.focusOn!=='function'||typeof game.starmap.select!=='function')throw Error('Rozhraní zobrazení systému není dostupné.');
-    const target=validateCamera(game.sysview.frameOf(system));rememberCamera(game);
-    game.setMapOpen(true);game.starmap.select(system);game.sysview.focusOn(system);game.starmap.goTo(target.x,target.y,target.scale);
+    if(game.stationView?.isOpen&&leaveStation){
+      if(typeof doc.dispatchEvent!=='function'||typeof CustomEvent!=='function')throw Error('Není dostupný herní přechod ze stanice na mapu');
+      rememberCamera(game);doc.dispatchEvent(new CustomEvent('spacefactory:goto',{detail:{system:targetSystem.id}}));
+      state.notice='Herní odkaz otevřel systém a mapu.';emit();return;
+    }
+    const target=validateCamera(game.sysview.frameOf(targetSystem));rememberCamera(game);
+    game.setMapOpen(true);game.starmap.select(targetSystem);game.sysview.focusOn(targetSystem);game.starmap.goTo(target.x,target.y,target.scale);
     state.notice='Kamera přesunuta na systém; herní objekty se nepřesouvají.';emit();
   }
   function screenPlanet(game,planet){
@@ -138,7 +147,7 @@ function createDebugTools({catalog,api,getGame,loadWorld,doc,onChange=()=>{},
     tick();if(state.xray)timer=timers.set(tick,150);emit();
   }
   function dispose(){serial++;state.busy=false;setXray(false);state.snapshot=null;system=null;previousCamera=null}
-  return {state,inspect,currentSystemId,cameraToSystem,cameraToPlanet,returnCamera,setXray,paintXray,dispose,
+  return {state,inspect,currentSystemId,cameraToSystem,cameraToKnownSystem,cameraToPlanet,returnCamera,setXray,paintXray,dispose,
     get canReturn(){return previousCamera!==null}};
 }
 // Read-only progression planning. Rules and snapshots are supplied explicitly.
@@ -487,6 +496,95 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
   if(!Number.isInteger(rank)||rank<0||rank>100)throw Error('Priorita musí být celé číslo 0–100');
   return {...basic,amount:p.target,from:[...from],...(from.includes('stations')?{priority:rank}:{})};
 }
+// Server-confirmed scouting list; structures are read in bounded GET batches.
+function createExploredSystems({api,catalog,loadMap,systemLabel=(id,system)=>system.name,onChange=()=>{},delay=ms=>new Promise(resolve=>setTimeout(resolve,ms)),now=()=>new Date().toISOString()}){
+  const state={busy:false,error:'',rows:[],total:0,progress:0,at:null,complete:false,query:'',filter:'all',page:0,notice:'Načti serverový seznam prozkoumaných systémů.'};
+  let serial=0,revision=0;
+  const emit=()=>onChange();
+  function invalidate(){serial++;state.busy=false;state.rows=[];state.total=state.progress=0;state.at=null;state.complete=false;state.error='';state.query='';state.filter='all';state.page=0;state.notice='Seznam zneplatněn; načti jej znovu.';emit()}
+  function cancel(){if(!state.busy)return;serial++;state.busy=false;state.complete=false;state.notice='Načítání zrušeno. Neověřené stavby nejsou nulové.';emit()}
+  function stale(){revision++;if(!state.rows.length&&!state.busy)return;state.complete=false;state.notice='Hra ohlásila změnu. Obnov seznam pro aktuální stav.';emit()}
+  async function refresh(){
+    if(state.busy)return;
+    const ticket=++serial,startedRevision=revision;Object.assign(state,{busy:true,error:'',rows:[],total:0,progress:0,complete:false,at:null,page:0,notice:'Načítám průzkum…'});emit();
+    try{
+      const units=await api('/api/units');if(ticket!==serial)return;
+      if(!Array.isArray(units.scouted)||units.scouted.some(id=>typeof id!=='string'||!/^[-]?\d{1,10}\.[-]?\d{1,10}\.\d{1,3}$/.test(id)))throw Error('Neznámý formát seznamu scouted; systémy nelze ověřit');
+      const ids=[...new Set(units.scouted)];state.total=ids.length;emit();
+      if(!ids.length){state.complete=true;state.at=now();state.notice='Server nevrátil žádné prozkoumané systémy.';return}
+      const meta=await api('/api/map/meta');if(ticket!==serial)return;
+      if(!['number','string'].includes(typeof meta.seed)||String(meta.seed).trim()===''||!Number.isSafeInteger(Number(meta.seed)))throw Error('Chybí platný seed mapy');
+      const map=await loadMap();if(ticket!==serial)return;
+      for(let i=0;i<ids.length;i++){
+        const id=ids[i];let system=null,name=id,error='';
+        try{system=map.systemById(Number(meta.seed),id);if(!system||system.id!==id||!Number.isFinite(system.x)||!Number.isFinite(system.y))throw Error('Systém nelze přeložit podle aktuálního seedu');name=systemLabel(id,system)||system.name||id}catch(e){error=String(e.message||e)}
+        state.rows.push({id,name,system,stations:null,miners:null,unknown:0,checkedAt:null,error});
+        if(i%100===99){emit();await delay(0);if(ticket!==serial)return}
+      }
+      state.rows.sort((a,b)=>a.name.localeCompare(b.name));const rowsById=new Map(state.rows.map(row=>[row.id,row]));emit();
+      for(let i=0;i<ids.length;i+=20){
+        if(ticket!==serial)return;
+        const part=ids.slice(i,i+20),rows=part.map(id=>rowsById.get(id));
+        try{
+          const body=await api('/api/structures?systems='+encodeURIComponent(part.join(',')));if(ticket!==serial)return;
+          const systems=body.systems;
+          if(!systems||typeof systems!=='object'||Array.isArray(systems))throw Error('Neznámý formát staveb systémů');
+          // Game systemview.askStructures: omitted keys in a successful batch mean no buildings.
+          for(const row of rows){
+            try{
+              const list=Object.prototype.hasOwnProperty.call(systems,row.id)?systems[row.id]:[];
+              if(!Array.isArray(list))throw Error('Neznámý seznam staveb');
+              const seen=new Set();let stations=0,miners=0,unknown=0;
+              for(const s of list){
+                if(!s||typeof s.id!=='string'||seen.has(s.id)||typeof s.building!=='string'||(s.system!==undefined&&s.system!==row.id))throw Error('Neplatná nebo duplicitní stavba');
+                seen.add(s.id);const spec=catalog.buildings[s.building];if(!spec){unknown++;continue}
+                if(spec.k==='station')stations++;if(spec.k==='miner')miners++;
+              }
+              Object.assign(row,{stations,miners,unknown,checkedAt:now()});
+            }catch(e){row.error=String(e.message||e)}
+          }
+        }catch(e){if(ticket!==serial)return;for(const row of rows)row.error=String(e.message||e)}
+        state.progress+=part.length;emit();
+        if(i+20<ids.length){await delay(150);if(ticket!==serial)return}
+      }
+      state.at=now();state.complete=state.rows.every(row=>!row.error&&!row.unknown&&row.checkedAt);
+      state.notice=state.complete?'Všechny systémy načteny.':'Neúplný přehled: chyby nebo neznámé typy staveb zůstávají označené.';
+      if(revision!==startedRevision){state.complete=false;state.notice='Během načítání hra ohlásila změnu. Obnov přehled.'}
+    }catch(e){if(ticket===serial){state.error=String(e.message||e);state.notice='Načítání selhalo; chybějící údaje nejsou nulové.'}}
+    finally{if(ticket===serial){state.busy=false;emit()}}
+  }
+  function filtered(){const query=state.query.trim().toLocaleLowerCase('cs-CZ');return state.rows.filter(row=>(row.name+' '+row.id).toLocaleLowerCase('cs-CZ').includes(query)&&(state.filter==='all'||state.filter==='stations'&&row.stations>0||state.filter==='miners'&&row.miners>0||state.filter==='empty'&&row.stations===0&&row.miners===0&&!row.unknown&&!row.error))}
+  function page(){const rows=filtered(),pages=Math.max(1,Math.ceil(rows.length/100));state.page=Math.max(0,Math.min(state.page,pages-1));return {rows:rows.slice(state.page*100,state.page*100+100),total:rows.length,pages,index:state.page}}
+  return {state,refresh,cancel,invalidate,stale,page};
+}
+// Pointer dragging stays outside render() so a drag keeps its pointer capture.
+function clampFloatingPosition(position,viewport,width=57,height=57){
+  if(!position||!Number.isFinite(position.left)||!Number.isFinite(position.top))return null;
+  return {left:Math.max(0,Math.min(Math.max(0,viewport.width-width),position.left)),top:Math.max(0,Math.min(Math.max(0,viewport.height-height),position.top))};
+}
+function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
+  let moving=null,suppressClick=false;
+  function place(position){const p=clampFloatingPosition(position,viewport());if(!p)return;Object.assign(button.style,{left:p.left+'px',top:p.top+'px',right:'auto',bottom:'auto'});setPosition(p)}
+  function restore(){place(getPosition())}
+  function stop(e){
+    if(!moving||e.pointerId!==moving.id)return;
+    if(moving.dragged){suppressClick=true;save()}
+    const id=moving.id;moving=null;if(button.hasPointerCapture?.(id))button.releasePointerCapture?.(id);
+  }
+  button.addEventListener('pointerdown',e=>{
+    if(e.button!==0||moving)return;const rect=button.getBoundingClientRect();
+    suppressClick=false;moving={id:e.pointerId,x:e.clientX,y:e.clientY,left:rect.left,top:rect.top,dragged:false};button.setPointerCapture?.(e.pointerId);
+  });
+  button.addEventListener('pointermove',e=>{
+    if(!moving||e.pointerId!==moving.id)return;
+    const dx=e.clientX-moving.x,dy=e.clientY-moving.y;if(!moving.dragged&&Math.hypot(dx,dy)<5)return;
+    moving.dragged=true;e.preventDefault();place({left:moving.left+dx,top:moving.top+dy});
+  });
+  button.addEventListener('pointerup',stop);button.addEventListener('pointercancel',stop);button.addEventListener('lostpointercapture',stop);
+  button.addEventListener('click',e=>{if(suppressClick&&e.detail!==0){suppressClick=false;e.preventDefault();e.stopImmediatePropagation()}else suppressClick=false},true);
+  restore();
+  return {restore,reset(){setPosition(null);Object.assign(button.style,{left:'auto',top:'auto',right:'18px',bottom:'22px'});save()}};
+}
   const STORE = 'aos-toolkit.v0.2';
   const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') } catch { return {} } })();
@@ -497,6 +595,7 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
     opened:false, tab:'summary', loaded:false, stations:[], stationId:'', view:null, meta:null,
     depositStatus:'unloaded', planets:[], depositNames:[], forecast:[], plan:[],
     error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position||old?.position, windowSize:saved?.windowSize||null,
+    fabPosition:saved?.fabPosition||null, fabMover:null, exploredOpened:false, exploredPosition:saved?.exploredPosition||null, exploredSize:saved?.exploredSize||null,
     audit:[], serverLog:[], querySerial:0, compact:false, writing:false
   };
   const debugTools=createDebugTools({catalog:GAME,api,getGame:()=>window.spacefactory,doc:document,onChange:()=>render(),
@@ -505,6 +604,8 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
   const progressAdvisor=createProgressAdvisor({catalog:GAME,api,productionFlows,loadAccount:options=>accountOverview.refresh(options),onChange:()=>render(),
     loadRules:async()=>{const [research,production,buildings]=await Promise.all([import('/src/research.js'),import('/src/production.js'),import('/src/buildings.js')]);
       return {...research,RECIPES:production.RECIPES,buildingById:buildings.buildingById}}});
+  let exploredLabel=null;
+  const exploredSystems=createExploredSystems({api,catalog:GAME,loadMap:async()=>{const [map,places]=await Promise.all([import('/src/world/mapgen.js'),import('/src/ui/places.js')]);exploredLabel=places.systemText;return map},systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored()});
   const fmt = x => Number.isFinite(Number(x)) ? Number(x).toLocaleString('cs-CZ',{maximumFractionDigits:2}) : '–';
   const num = (x, alt=0) => Number.isFinite(Number(x)) ? Number(x) : alt;
   const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -512,11 +613,11 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
   const stack = id => GAME.items[id]?.s || null;
   const places = value => [value].flat().filter(Boolean);
   const maxStack = (view,id) => Math.round(num(GAME.buildings[view?.station?.building]?.s,20) * (stack(id)||0));
-  const save = () => { try { localStorage.setItem(STORE,JSON.stringify({settings:{...settings,enableWrites:false},position:state.position,windowSize:state.windowSize})) } catch {} };
+  const save = () => { try { localStorage.setItem(STORE,JSON.stringify({settings:{...settings,enableWrites:false},position:state.position,windowSize:state.windowSize,fabPosition:state.fabPosition,exploredPosition:state.exploredPosition,exploredSize:state.exploredSize})) } catch {} };
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.5.1',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.5.2',at:new Date().toISOString(),station:state.stationId,
     requestsOn:state.view?.requestsOn,exportsOn:state.view?.exportsOn,groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -804,7 +905,7 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.5.1',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.5.2',at:new Date().toISOString(),reference:GAME.version,
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -954,10 +1055,44 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
     }catch(e){d.error=String(e.message||e)}
     render();
   }
+  function exploredCounts(row,key){const n=row[key];return n===null||row.error?'neověřeno':n>0?`${n}${row.unknown?' + ?':''}`:row.unknown?'neověřeno':'ne'}
+  function exploredMarkup(){
+    const d=exploredSystems.state,p=exploredSystems.page();
+    return `<header id="explored-drag"><div><b>Prozkoumané systémy</b><small>Serverový průzkum · ${d.total} systémů</small></div><button data-explored="close" aria-label="Zavřít prozkoumané systémy">×</button></header>
+    <div class="explored-tools"><button data-explored="refresh" ${d.busy||state.writing?'disabled':''}>Načíst / obnovit</button><button data-explored="cancel" ${d.busy?'':'disabled'}>Zrušit načítání</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button>
+    <label>Hledat <input id="explored-query" type="search" value="${esc(d.query)}" placeholder="název nebo ID"></label><label>Zobrazit <select id="explored-filter">${[['all','Vše'],['stations','Se stanicí'],['miners','S minery'],['empty','Bez stanice a minerů']].map(([id,label])=>`<option value="${id}" ${d.filter===id?'selected':''}>${label}</option>`).join('')}</select></label></div>
+    <div class="status" role="status">${esc(d.error||d.notice)} ${d.busy?`Ověřeno ${d.progress}/${d.total}.`:''}</div>
+    <div class="explored-body"><p>Kliknutí na název přesune kameru. Počty zahrnují všechny stavby, které server pro daný systém zpřístupní, včetně cizích. Neověřené údaje neznamenají prázdný systém.</p>
+    <div class="table"><table><thead><tr><th>Systém</th><th>Stanice</th><th>Mineři</th><th>Ověření</th></tr></thead><tbody id="explored-rows">${exploredRows(p.rows)}</tbody></table></div></div>
+    <footer><span id="explored-page">${p.total} výsledků · strana ${p.index+1}/${p.pages}</span><div><button data-explored="prev" ${p.index?'':'disabled'}>Předchozí</button><button data-explored="next" ${p.index+1<p.pages?'':'disabled'}>Další</button></div></footer>`;
+  }
+  function exploredRows(rows){return rows.map(row=>`<tr><td><button class="system-link" data-explored-system="${esc(row.id)}" ${row.system?'':'disabled'}>${esc(row.name)}</button><small>${esc(row.id)}</small></td><td>${exploredCounts(row,'stations')}</td><td>${exploredCounts(row,'miners')}</td><td>${esc(row.error||row.checkedAt||'čeká na načtení')}${row.unknown?` · ${row.unknown} neznámých typů staveb`:''}</td></tr>`).join('')||'<tr><td colspan="4">Žádné výsledky.</td></tr>'}
+  function bindExploredLinks(win){win.querySelectorAll('[data-explored-system]').forEach(b=>b.addEventListener('click',()=>{
+    const row=exploredSystems.state.rows.find(row=>row.id===b.dataset.exploredSystem);
+    try{if(!row?.system)throw Error('Systém není ověřen');debugTools.cameraToKnownSystem(row.system,{leaveStation:true});exploredSystems.state.error='';exploredSystems.state.notice='Kamera přesunuta na '+row.name}catch(e){exploredSystems.state.error=e.message}renderExplored();
+  }))}
+  function renderExplored(){
+    const win=state.root?.getElementById('explored-window');if(!win)return;win.hidden=!state.exploredOpened;if(!state.exploredOpened)return;
+    // Preserve focus and partially typed search text during background batch updates.
+    const active=win.querySelector('#explored-query'),focused=state.root.activeElement===active,start=active?.selectionStart,end=active?.selectionEnd;
+    win.innerHTML=exploredMarkup();
+    win.querySelector('#explored-drag').addEventListener('pointerdown',e=>drag(e,win,'exploredPosition'));
+    win.querySelectorAll('[data-explored]').forEach(b=>b.addEventListener('click',()=>exploredAction(b.dataset.explored)));
+    const query=win.querySelector('#explored-query');query.addEventListener('input',e=>{exploredSystems.state.query=e.target.value;exploredSystems.state.page=0;renderExplored()});
+    win.querySelector('#explored-filter').addEventListener('change',e=>{exploredSystems.state.filter=e.target.value;exploredSystems.state.page=0;renderExplored()});bindExploredLinks(win);
+    if(focused){query.focus({preventScroll:true});if(start!==null&&start!==undefined)query.setSelectionRange?.(start,end)}
+  }
+  async function exploredAction(name){
+    if(name==='close'){state.exploredOpened=false;exploredSystems.cancel();renderExplored();return}
+    if(name==='cancel'){exploredSystems.cancel();return}
+    if(name==='refresh'){if(!state.writing)await exploredSystems.refresh();return}
+    if(name==='return'){try{debugTools.returnCamera();exploredSystems.state.error=''}catch(e){exploredSystems.state.error=e.message}}
+    if(name==='prev')exploredSystems.state.page--;if(name==='next')exploredSystems.state.page++;renderExplored();
+  }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.5.1 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.5.2 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
-      <button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
+      <button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
   }
   function render(){
@@ -965,8 +1100,8 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
     const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['debug','Debug'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.5.1 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
-     <nav><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.5.2 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+     <nav><button data-act="exploredOpen" title="Samostatné okno prozkoumaných systémů">Systémy</button><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
      <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
@@ -1017,6 +1152,8 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
     panel.querySelector('#drag')?.addEventListener('pointerdown',drag);
   }
   async function action(name){
+    if(name==='exploredOpen'){state.exploredOpened=true;renderExplored();if(!exploredSystems.state.at&&!exploredSystems.state.busy&&!state.writing)await exploredSystems.refresh();return}
+    if(name==='resetFab'){state.fabMover?.reset();return}
     if(state.processing && !['hide','exportPlan','diag'].includes(name))return;
     if(name==='hide'){state.opened=false;render();return}
     if(name==='refresh'){await loadStations();return}
@@ -1024,17 +1161,17 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
     if(name==='addRequest'||name==='addExport'){addDraft(name==='addRequest'?'request':'export',state.root?.getElementById('panel')?.querySelector('#draft-item')?.value);render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.5.1',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'0.5.2',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,priority:p.priority,group:p.existing?.group??p.group,risk:p.risk,error:p.error}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
     if(name==='apply'){await applySelected();return}
   }
-  function drag(e){
+  function drag(e,target=null,positionKey='position'){
     if(e.button!==0||e.target.closest('button'))return;
-    const panel=state.root.getElementById('panel');const rect=panel.getBoundingClientRect(),p={x:e.clientX,y:e.clientY,left:rect.left,top:rect.top};
+    const panel=target||state.root.getElementById('panel');const rect=panel.getBoundingClientRect(),p={x:e.clientX,y:e.clientY,left:rect.left,top:rect.top};
     panel.setPointerCapture?.(e.pointerId);
-    const move=x=>{const left=Math.max(0,Math.min(innerWidth-100,p.left+x.clientX-p.x));const top=Math.max(0,Math.min(innerHeight-75,p.top+x.clientY-p.y));panel.style.left=left+'px';panel.style.top=top+'px';panel.style.right='auto';state.position={left,top}};
+    const move=x=>{const left=Math.max(0,Math.min(innerWidth-100,p.left+x.clientX-p.x));const top=Math.max(0,Math.min(innerHeight-75,p.top+x.clientY-p.y));panel.style.left=left+'px';panel.style.top=top+'px';panel.style.right='auto';state[positionKey]={left,top}};
     const stop=()=>{panel.removeEventListener('pointermove',move);panel.removeEventListener('pointerup',stop);panel.removeEventListener('pointercancel',stop);save()};
     panel.addEventListener('pointermove',move);panel.addEventListener('pointerup',stop);panel.addEventListener('pointercancel',stop);
   }
@@ -1044,7 +1181,7 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
     const root=host.attachShadow({mode:'open'});state.root=root;
     const style=document.createElement('style');style.textContent=`
       *{box-sizing:border-box}button,input,select{font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}
-      [hidden]{display:none!important}#fab{pointer-events:auto;position:fixed;right:18px;bottom:22px;background:#163a49;border:1px solid #38a0b0;color:#e8fcff;font-weight:bold;border-radius:15px;width:57px;height:57px;box-shadow:0 8px 28px #0008}
+      [hidden]{display:none!important}#fab{touch-action:none;user-select:none;pointer-events:auto;position:fixed;right:18px;bottom:22px;background:#163a49;border:1px solid #38a0b0;color:#e8fcff;font-weight:bold;border-radius:15px;width:57px;height:57px;box-shadow:0 8px 28px #0008}
       #panel{pointer-events:auto;position:fixed;right:16px;top:55px;width:min(650px,calc(100vw - 18px));min-width:min(320px,calc(100vw - 16px));max-width:calc(100vw - 16px);min-height:min(350px,calc(100vh - 75px));max-height:calc(100vh - 75px);resize:both;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #446474;border-radius:12px;box-shadow:0 15px 45px #000b;font:12px/1.45 system-ui,Arial,sans-serif;overflow:hidden}
       header{padding:12px 14px;background:#1a3544;display:flex;align-items:center;justify-content:space-between;cursor:move;touch-action:none;user-select:none}header div{display:grid}header b{font-size:15px}header small{font-size:11px;color:#afc6d1}header button{background:#273d49;color:#fff;border:1px solid #56717b;border-radius:6px;font-size:20px;width:30px;height:30px}
       #panel header button[data-act="hide"]{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif;flex-shrink:0}
@@ -1054,8 +1191,10 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
       .table{overflow:auto;margin:8px 0}.table table{border-collapse:collapse;min-width:440px;width:100%;font-size:11px}.table th,.table td{padding:7px;text-align:left;border-bottom:1px solid #34505c;vertical-align:top}.table th{background:#1e3543;color:#b5e6ed}
       .plan{display:flex;align-items:flex-start;gap:9px;padding:8px 6px;border:1px solid #314f5f;border-radius:7px;margin-top:5px}.plan.same{opacity:.8}.draft-fields{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.draft-fields label{display:grid;gap:3px}.draft-fields input{width:130px}.draft-fields input,.draft-fields select,#draft-item{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:5px;padding:5px;max-width:100%}.info{min-width:0}.plan input{margin-top:3px}.info{flex:1}.info strong{color:#e7f9ff}.info small{display:block;color:#a9c7d2}.info b{color:#fff}.caution{color:#ffcc7b!important}.tick{display:flex;gap:8px;align-items:center;margin:8px 0}.warning{padding:9px;background:#4b3b20;border-radius:7px;color:#ffde9b}.dangerbtn{background:#762b30!important;border-color:#c85656!important}pre{overflow:auto;background:#162f3b;padding:9px}footer{display:flex;justify-content:space-between;align-items:center;font-size:10px;padding:8px 12px;background:#1a303e;color:#b4c8d3}
       #debug-system,#debug-planet,[id^="advisor-"],#account-filter{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
+      #explored-window{pointer-events:auto;position:fixed;z-index:2;left:25px;top:100px;width:min(800px,calc(100vw - 16px));height:480px;min-width:min(320px,calc(100vw - 16px));min-height:min(260px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);resize:both;overflow:hidden;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #527d8f;border-radius:12px;font:12px/1.45 system-ui;box-shadow:0 15px 45px #000b}
+      #explored-window[hidden]{display:none}#explored-window header button{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif}#explored-window .explored-body{flex:1;min-height:80px;overflow:auto;padding:10px}#explored-window .explored-tools{display:flex;flex-wrap:wrap;gap:6px;padding:8px}#explored-window label{display:flex;align-items:center;gap:5px}#explored-window input,#explored-window select{max-width:220px;background:#182e3b;color:#fff;border:1px solid #587080;padding:5px;border-radius:5px}#explored-window button[data-explored],#explored-window .system-link{background:#21586a;color:#e4faff;border:1px solid #3b91a0;border-radius:5px;padding:5px 7px}#explored-window .system-link{text-align:left;text-decoration:underline;background:transparent;border:0;color:#8bdcef;padding:0}#explored-window td small{display:block;color:#afc6d1}#explored-window header{flex-shrink:0}#explored-window footer{gap:5px}
       @media(max-width:670px){#panel{top:8px;left:8px!important;right:auto!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
-    const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit';fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
+    const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit · přesuň tažením';state.fabMover=makeMovableButton(fab,{getPosition:()=>state.fabPosition,setPosition:p=>{state.fabPosition=p},viewport:()=>({width:innerWidth,height:innerHeight}),save});fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
     const panel=document.createElement('section');panel.id='panel';panel.hidden=true;
     if(state.position){panel.style.left=state.position.left+'px';panel.style.top=state.position.top+'px';panel.style.right='auto'}
     if(state.windowSize){
@@ -1065,7 +1204,10 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
         panel.style.height=Math.min(Math.max(350,height),Math.max(1,innerHeight-75))+'px';
       }
     }
-    root.append(style,fab,panel);document.body.append(host);state.host=host;render();
+    const explored=document.createElement('section');explored.id='explored-window';explored.hidden=true;
+    root.append(style,fab,panel,explored);document.body.append(host);state.host=host;render();
+    const restoreExplored=()=>{if(state.exploredSize){explored.style.width=Math.min(Math.max(320,state.exploredSize.width||800),Math.max(1,innerWidth-16))+'px';explored.style.height=Math.min(Math.max(260,state.exploredSize.height||480),Math.max(1,innerHeight-16))+'px'}const p=clampFloatingPosition(state.exploredPosition||{left:25,top:100},{width:innerWidth,height:innerHeight},Math.min(320,innerWidth),40);if(p){state.exploredPosition=p;explored.style.left=p.left+'px';explored.style.top=p.top+'px'}};restoreExplored();
+    window.addEventListener('resize',()=>{state.fabMover.restore();restoreExplored();save()});
     if(typeof ResizeObserver==='function'){
       let resizeSave;
       new ResizeObserver(()=>{
@@ -1075,11 +1217,13 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
         state.windowSize={width:Math.round(rect.width),height:Math.round(rect.height)};
         clearTimeout(resizeSave);resizeSave=setTimeout(save,250);
       }).observe(panel);
+      let exploredSave;new ResizeObserver(()=>{if(!explored.style.width||!explored.style.height||explored.hidden)return;const box=explored.getBoundingClientRect();state.exploredSize={width:Math.round(box.width),height:Math.round(box.height)};clearTimeout(exploredSave);exploredSave=setTimeout(save,250)}).observe(explored);
     }
   }
   document.addEventListener('spacefactory:auth',e=>{
     if(e.detail?.profile)return;
-    accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
+    state.exploredOpened=false;exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
   });
+  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>exploredSystems.stale());
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 })();
