@@ -1,0 +1,394 @@
+// ==UserScript==
+// @name         AOS Toolkit - All Out of Space
+// @namespace    https://alloutofspace.com/
+// @version      0.2.2
+// @description  Smart Logistics profiles, confirmed API writes, galaxy resources, production and diagnostics (CZ)
+// @author       AOS Toolkit
+// @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
+// @updateURL    https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.meta.js
+// @downloadURL  https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.user.js
+// @match        https://alloutofspace.com/*
+// @exclude      https://alloutofspace.com/api/*
+// @run-at       document-idle
+// @grant        none
+// @noframes
+// ==/UserScript==
+
+(() => {
+  'use strict';
+  if (window.top !== window || window.__aosToolkitRunning) return;
+  window.__aosToolkitRunning = true;
+  // GAME is embedded at build time. Does not fetch or send player data elsewhere.
+  const GAME = {"version":"2026-10-25","items":{"iron-ore":{"n":"Iron Ore","c":"raw","t":1,"s":100},"copper-ore":{"n":"Copper Ore","c":"raw","t":1,"s":100},"carbon":{"n":"Carbon Rock","c":"raw","t":1,"s":100},"silicon":{"n":"Silicon Ore","c":"raw","t":1,"s":100},"aluminum-ore":{"n":"Aluminum Ore","c":"raw","t":1,"s":100},"hydrogen-ice":{"n":"Hydrogen Ice","c":"raw","t":1,"s":100},"oxygen-ice":{"n":"Oxygen Ice","c":"raw","t":1,"s":100},"nickel-ore":{"n":"Nickel Ore","c":"raw","t":2,"s":50},"titanium-ore":{"n":"Titanium Ore","c":"raw","t":2,"s":50},"magnesium-ore":{"n":"Magnesium Ore","c":"raw","t":2,"s":50},"chromium-ore":{"n":"Chromium Ore","c":"raw","t":2,"s":50},"tin-ore":{"n":"Tin Ore","c":"raw","t":2,"s":50},"zinc-ore":{"n":"Zinc Ore","c":"raw","t":2,"s":50},"lead-ore":{"n":"Lead Ore","c":"raw","t":2,"s":50},"sulfur":{"n":"Sulfur Deposit","c":"raw","t":2,"s":50},"nitrogen-ice":{"n":"Nitrogen Ice","c":"raw","t":2,"s":50},"phosphorus-ore":{"n":"Phosphorus Ore","c":"raw","t":2,"s":50},"cobalt-ore":{"n":"Cobalt Ore","c":"raw","t":3,"s":20},"lithium-ore":{"n":"Lithium Ore","c":"raw","t":3,"s":20},"silver-ore":{"n":"Silver Ore","c":"raw","t":3,"s":20},"gold":{"n":"Gold Ore","c":"raw","t":3,"s":20},"tungsten-ore":{"n":"Tungsten Ore","c":"raw","t":3,"s":20},"boron-ore":{"n":"Boron Ore","c":"raw","t":3,"s":20},"neodymium-ore":{"n":"Neodymium Ore","c":"raw","t":3,"s":20},"helium-gas":{"n":"Helium Gas","c":"raw","t":3,"s":20},"xenon-gas":{"n":"Xenon Gas","c":"raw","t":3,"s":20},"platinum":{"n":"Platinum Ore","c":"raw","t":4,"s":10},"palladium-ore":{"n":"Palladium Ore","c":"raw","t":4,"s":10},"iridium-ore":{"n":"Iridium Ore","c":"raw","t":4,"s":10},"uranium-ore":{"n":"Uranium Ore","c":"raw","t":4,"s":10},"thorium-ore":{"n":"Thorium Ore","c":"raw","t":4,"s":10},"helium-3":{"n":"Helium-3","c":"raw","t":4,"s":10},"iron-ingot":{"n":"Iron Ingot","c":"refined","t":1,"s":100},"copper-ingot":{"n":"Copper Ingot","c":"refined","t":1,"s":100},"nickel-ingot":{"n":"Nickel Ingot","c":"refined","t":2,"s":50},"tin-ingot":{"n":"Tin Ingot","c":"refined","t":2,"s":50},"zinc-ingot":{"n":"Zinc Ingot","c":"refined","t":2,"s":50},"lead-ingot":{"n":"Lead Ingot","c":"refined","t":2,"s":50},"cobalt-ingot":{"n":"Cobalt Ingot","c":"refined","t":3,"s":20},"silver-ingot":{"n":"Silver Ingot","c":"refined","t":3,"s":20},"gold-ingot":{"n":"Gold Ingot","c":"refined","t":3,"s":20},"refined-carbon":{"n":"Refined Carbon","c":"refined","t":1,"s":100},"glass":{"n":"Glass","c":"refined","t":1,"s":100},"solder":{"n":"Solder","c":"refined","t":2,"s":50},"bronze":{"n":"Bronze","c":"refined","t":2,"s":50},"brass":{"n":"Brass","c":"refined","t":2,"s":50},"lead-shielding":{"n":"Lead Shielding","c":"refined","t":2,"s":50},"steel":{"n":"Steel","c":"refined","t":1,"s":100},"graphite":{"n":"Graphite","c":"refined","t":1,"s":100},"pure-silicon":{"n":"Pure Silicon","c":"refined","t":1,"s":100},"borosilicate-glass":{"n":"Borosilicate Glass","c":"refined","t":3,"s":20},"aluminum-ingot":{"n":"Aluminum Ingot","c":"refined","t":1,"s":100},"magnesium-ingot":{"n":"Magnesium Ingot","c":"refined","t":2,"s":50},"magnesium-alloy":{"n":"Magnesium Alloy","c":"refined","t":2,"s":50},"titanium-ingot":{"n":"Titanium Ingot","c":"refined","t":2,"s":50},"chromium-ingot":{"n":"Chromium Ingot","c":"refined","t":2,"s":50},"lithium-metal":{"n":"Lithium Metal","c":"refined","t":3,"s":20},"neodymium-metal":{"n":"Neodymium Metal","c":"refined","t":3,"s":20},"tungsten-powder":{"n":"Tungsten Powder","c":"refined","t":3,"s":20},"stainless-steel":{"n":"Stainless Steel","c":"refined","t":2,"s":50},"superalloy":{"n":"Superalloy","c":"refined","t":3,"s":20},"titanium-alloy":{"n":"Titanium Alloy","c":"refined","t":2,"s":50},"tungsten-carbide":{"n":"Tungsten Carbide","c":"refined","t":3,"s":20},"engine-nozzle":{"n":"Engine Nozzle","c":"parts","t":3,"s":10},"neodymium-magnet":{"n":"Neodymium Magnet","c":"parts","t":3,"s":10},"platinum-ingot":{"n":"Platinum Ingot","c":"refined","t":4,"s":10},"palladium-ingot":{"n":"Palladium Ingot","c":"refined","t":4,"s":10},"iridium-ingot":{"n":"Iridium Ingot","c":"refined","t":4,"s":10},"iridium-crucible":{"n":"Iridium Crucible","c":"parts","t":4,"s":5},"iron-plate":{"n":"Iron Plate","c":"refined","t":1,"s":100},"copper-wire":{"n":"Copper Wire","c":"refined","t":1,"s":100},"sulfur-powder":{"n":"Sulfur Powder","c":"refined","t":2,"s":50},"phosphorus-powder":{"n":"Phosphorus Powder","c":"refined","t":2,"s":50},"copper-sheet":{"n":"Copper Sheet","c":"refined","t":1,"s":100},"copper-tubing":{"n":"Copper Tubing","c":"refined","t":1,"s":100},"aluminum-sheet":{"n":"Aluminum Sheet","c":"refined","t":1,"s":100},"aluminum-frame":{"n":"Aluminum Frame","c":"refined","t":1,"s":100},"titanium-plate":{"n":"Titanium Plate","c":"refined","t":2,"s":50},"gold-foil":{"n":"Gold Foil","c":"refined","t":3,"s":20},"diamond":{"n":"Diamond","c":"refined","t":1,"s":100},"hydrogen-filter":{"n":"Hydrogen Filter","c":"parts","t":4,"s":5},"water":{"n":"Water","c":"refined","t":1,"s":100},"polymer":{"n":"Polymer","c":"refined","t":1,"s":100},"sulfuric-acid":{"n":"Sulfuric Acid","c":"refined","t":2,"s":50},"rubber":{"n":"Rubber","c":"refined","t":2,"s":50},"silver-paste":{"n":"Silver Paste","c":"refined","t":3,"s":20},"nickel-plating":{"n":"Nickel Plating","c":"refined","t":2,"s":50},"chrome-plating":{"n":"Chrome Plating","c":"refined","t":2,"s":50},"galvanized-steel":{"n":"Galvanized Steel","c":"refined","t":2,"s":50},"gold-contacts":{"n":"Gold Contacts","c":"parts","t":3,"s":10},"mirror":{"n":"Mirror","c":"parts","t":3,"s":10},"ammonia":{"n":"Ammonia","c":"refined","t":2,"s":50},"fertilizer":{"n":"Fertilizer","c":"goods","t":2,"s":20},"mining-charge":{"n":"Mining Charge","c":"goods","t":2,"s":20},"boron-powder":{"n":"Boron Powder","c":"refined","t":3,"s":20},"battery-cathode":{"n":"Battery Cathode","c":"parts","t":3,"s":10},"catalyst-mesh":{"n":"Catalyst Mesh","c":"parts","t":4,"s":5},"uranium-oxide":{"n":"Uranium Oxide","c":"refined","t":4,"s":10},"thorium-oxide":{"n":"Thorium Oxide","c":"refined","t":4,"s":10},"liquid-hydrogen":{"n":"Liquid Hydrogen","c":"refined","t":1,"s":100},"liquid-oxygen":{"n":"Liquid Oxygen","c":"refined","t":1,"s":100},"liquid-nitrogen":{"n":"Liquid Nitrogen","c":"refined","t":2,"s":50},"hydrogen-gas":{"n":"Hydrogen Gas","c":"refined","t":1,"s":100},"oxygen-gas":{"n":"Oxygen Gas","c":"refined","t":1,"s":100},"nitrogen-gas":{"n":"Nitrogen Gas","c":"refined","t":2,"s":50},"breathable-air":{"n":"Breathable Air","c":"refined","t":2,"s":50},"rocket-fuel":{"n":"Rocket Fuel","c":"refined","t":1,"s":100},"helium-tank":{"n":"Helium Tank","c":"parts","t":3,"s":10},"xenon-tank":{"n":"Xenon Tank","c":"parts","t":3,"s":10},"liquid-helium":{"n":"Liquid Helium","c":"refined","t":3,"s":20},"hydrogen-storage-cell":{"n":"Hydrogen Storage Cell","c":"parts","t":4,"s":5},"silicon-wafer":{"n":"Silicon Wafer","c":"parts","t":1,"s":50},"deuterium":{"n":"Deuterium","c":"refined","t":1,"s":100},"enriched-uranium":{"n":"Enriched Uranium","c":"refined","t":4,"s":10},"uranium-233":{"n":"Uranium-233","c":"refined","t":4,"s":10},"fusion-fuel-pellet":{"n":"Fusion Fuel Pellet","c":"refined","t":4,"s":10},"flare":{"n":"Flare","c":"goods","t":2,"s":20},"igniter":{"n":"Igniter","c":"parts","t":2,"s":20},"lead-acid-battery":{"n":"Lead-Acid Battery","c":"parts","t":2,"s":20},"lithium-battery":{"n":"Lithium Battery","c":"parts","t":3,"s":10},"electric-motor":{"n":"Electric Motor","c":"parts","t":3,"s":10},"xenon-lamp":{"n":"Xenon Lamp","c":"goods","t":3,"s":10},"fuel-cell":{"n":"Fuel Cell","c":"parts","t":4,"s":5},"ion-thruster":{"n":"Ion Thruster","c":"parts","t":3,"s":10},"neutron-detector":{"n":"Neutron Detector","c":"parts","t":4,"s":5},"control-rod":{"n":"Control Rod","c":"parts","t":3,"s":10},"fission-fuel-rod":{"n":"Fission Fuel Rod","c":"parts","t":4,"s":5},"thorium-fuel-rod":{"n":"Thorium Fuel Rod","c":"parts","t":4,"s":5},"fur-2":{"n":"Tier 2 Furnace","c":"buildings","t":2,"s":5},"fur-3":{"n":"Tier 3 Furnace","c":"buildings","t":3,"s":2},"prs-2":{"n":"Tier 2 Press","c":"buildings","t":2,"s":5},"prs-3":{"n":"Tier 3 Press","c":"buildings","t":3,"s":2},"chem-2":{"n":"Tier 2 Chemical Plant","c":"buildings","t":2,"s":5},"chem-3":{"n":"Tier 3 Chemical Plant","c":"buildings","t":3,"s":2},"cryo-2":{"n":"Tier 2 Cryo Plant","c":"buildings","t":2,"s":5},"cryo-3":{"n":"Tier 3 Cryo Plant","c":"buildings","t":3,"s":2},"ref-2":{"n":"Tier 2 Refinery","c":"buildings","t":2,"s":5},"ref-3":{"n":"Tier 3 Refinery","c":"buildings","t":3,"s":2},"asm-2":{"n":"Tier 2 Assembler","c":"buildings","t":2,"s":5},"asm-3":{"n":"Tier 3 Assembler","c":"buildings","t":3,"s":2},"assembler-2":{"n":"Tier 2 Assembly Bay","c":"buildings","t":2,"s":5},"assembler-3":{"n":"Tier 3 Assembly Bay","c":"buildings","t":3,"s":2},"miner-2":{"n":"Tier 2 Miner","c":"buildings","t":2,"s":5},"miner-3":{"n":"Tier 3 Miner","c":"buildings","t":3,"s":2},"fur-1":{"n":"Tier 1 Furnace","c":"buildings","t":1,"s":10},"prs-1":{"n":"Tier 1 Press","c":"buildings","t":1,"s":10},"chem-1":{"n":"Tier 1 Chemical Plant","c":"buildings","t":1,"s":10},"cryo-1":{"n":"Tier 1 Cryo Plant","c":"buildings","t":1,"s":10},"ref-1":{"n":"Tier 1 Refinery","c":"buildings","t":1,"s":10},"asm-1":{"n":"Tier 1 Assembler","c":"buildings","t":1,"s":10},"miner-1":{"n":"Tier 1 Miner","c":"buildings","t":1,"s":10},"station-1":{"n":"Tier 1 Space Station","c":"buildings","t":1,"s":10},"scout-1":{"n":"Tier 1 Scout Ship","c":"ships","t":1,"s":1}},"recipes":{"iron-ingot":{"o":"iron-ingot","m":1,"i":{"iron-ore":2}},"copper-ingot":{"o":"copper-ingot","m":1,"i":{"copper-ore":2}},"nickel-ingot":{"o":"nickel-ingot","m":1,"i":{"nickel-ore":2}},"tin-ingot":{"o":"tin-ingot","m":1,"i":{"tin-ore":2}},"zinc-ingot":{"o":"zinc-ingot","m":1,"i":{"zinc-ore":2}},"lead-ingot":{"o":"lead-ingot","m":1,"i":{"lead-ore":2}},"cobalt-ingot":{"o":"cobalt-ingot","m":1,"i":{"cobalt-ore":2}},"silver-ingot":{"o":"silver-ingot","m":1,"i":{"silver-ore":2}},"gold-ingot":{"o":"gold-ingot","m":1,"i":{"gold":2}},"refined-carbon":{"o":"refined-carbon","m":1,"i":{"carbon":2}},"glass":{"o":"glass","m":1,"i":{"silicon":2}},"solder":{"o":"solder","m":1,"i":{"tin-ingot":2,"copper-ingot":1}},"bronze":{"o":"bronze","m":1,"i":{"copper-ingot":3,"tin-ingot":1}},"brass":{"o":"brass","m":1,"i":{"copper-ingot":2,"zinc-ingot":1}},"lead-shielding":{"o":"lead-shielding","m":1,"i":{"lead-ingot":4}},"steel":{"o":"steel","m":1,"i":{"iron-ingot":2,"refined-carbon":1}},"graphite":{"o":"graphite","m":1,"i":{"refined-carbon":3}},"pure-silicon":{"o":"pure-silicon","m":1,"i":{"silicon":2,"refined-carbon":1}},"borosilicate-glass":{"o":"borosilicate-glass","m":1,"i":{"silicon":2,"boron-powder":1}},"aluminum-ingot":{"o":"aluminum-ingot","m":1,"i":{"aluminum-ore":2}},"magnesium-ingot":{"o":"magnesium-ingot","m":1,"i":{"magnesium-ore":2}},"magnesium-alloy":{"o":"magnesium-alloy","m":1,"i":{"magnesium-ingot":2,"aluminum-ingot":1}},"titanium-ingot":{"o":"titanium-ingot","m":1,"i":{"titanium-ore":2,"magnesium-ingot":1}},"chromium-ingot":{"o":"chromium-ingot","m":1,"i":{"chromium-ore":2,"refined-carbon":1}},"lithium-metal":{"o":"lithium-metal","m":1,"i":{"lithium-ore":2}},"neodymium-metal":{"o":"neodymium-metal","m":1,"i":{"neodymium-ore":2}},"tungsten-powder":{"o":"tungsten-powder","m":1,"i":{"tungsten-ore":2,"hydrogen-gas":2}},"stainless-steel":{"o":"stainless-steel","m":1,"i":{"steel":3,"chromium-ingot":1,"nickel-ingot":1}},"superalloy":{"o":"superalloy","m":1,"i":{"nickel-ingot":3,"cobalt-ingot":1,"chromium-ingot":1}},"titanium-alloy":{"o":"titanium-alloy","m":1,"i":{"titanium-ingot":3,"aluminum-ingot":1}},"tungsten-carbide":{"o":"tungsten-carbide","m":1,"i":{"tungsten-powder":1,"refined-carbon":1}},"engine-nozzle":{"o":"engine-nozzle","m":1,"i":{"tungsten-powder":4}},"neodymium-magnet":{"o":"neodymium-magnet","m":1,"i":{"iron-ingot":2,"neodymium-metal":1,"boron-powder":1}},"platinum-ingot":{"o":"platinum-ingot","m":1,"i":{"platinum":2}},"palladium-ingot":{"o":"palladium-ingot","m":1,"i":{"palladium-ore":2}},"iridium-ingot":{"o":"iridium-ingot","m":1,"i":{"iridium-ore":2}},"iridium-crucible":{"o":"iridium-crucible","m":1,"i":{"iridium-ingot":3}},"iron-plate":{"o":"iron-plate","m":1,"i":{"iron-ingot":2}},"copper-wire":{"o":"copper-wire","m":1,"i":{"copper-ingot":1}},"sulfur-powder":{"o":"sulfur-powder","m":1,"i":{"sulfur":1}},"phosphorus-powder":{"o":"phosphorus-powder","m":1,"i":{"phosphorus-ore":1}},"copper-sheet":{"o":"copper-sheet","m":1,"i":{"copper-ingot":2}},"copper-tubing":{"o":"copper-tubing","m":1,"i":{"copper-ingot":3}},"aluminum-sheet":{"o":"aluminum-sheet","m":1,"i":{"aluminum-ingot":2}},"aluminum-frame":{"o":"aluminum-frame","m":1,"i":{"aluminum-ingot":3}},"titanium-plate":{"o":"titanium-plate","m":1,"i":{"titanium-ingot":2}},"gold-foil":{"o":"gold-foil","m":1,"i":{"gold-ingot":1}},"diamond":{"o":"diamond","m":1,"i":{"graphite":5}},"hydrogen-filter":{"o":"hydrogen-filter","m":1,"i":{"palladium-ingot":2}},"water":{"o":"water","m":1,"i":{"hydrogen-gas":2,"oxygen-gas":1}},"polymer":{"o":"polymer","m":1,"i":{"refined-carbon":1,"hydrogen-gas":2}},"sulfuric-acid":{"o":"sulfuric-acid","m":1,"i":{"sulfur-powder":1,"oxygen-gas":2,"water":1}},"rubber":{"o":"rubber","m":1,"i":{"polymer":2,"sulfur-powder":1}},"silver-paste":{"o":"silver-paste","m":1,"i":{"silver-ingot":1,"polymer":1}},"nickel-plating":{"o":"nickel-plating","m":1,"i":{"steel":1,"nickel-ingot":1,"sulfuric-acid":1}},"chrome-plating":{"o":"chrome-plating","m":1,"i":{"steel":1,"chromium-ingot":1,"sulfuric-acid":1}},"galvanized-steel":{"o":"galvanized-steel","m":1,"i":{"steel":2,"zinc-ingot":1}},"gold-contacts":{"o":"gold-contacts","m":1,"i":{"copper-sheet":1,"gold-ingot":1}},"mirror":{"o":"mirror","m":1,"i":{"glass":1,"silver-ingot":1}},"ammonia":{"o":"ammonia","m":1,"i":{"nitrogen-gas":1,"hydrogen-gas":3}},"fertilizer":{"o":"fertilizer","m":1,"i":{"ammonia":2,"phosphorus-powder":1}},"mining-charge":{"o":"mining-charge","m":1,"i":{"ammonia":2,"sulfur-powder":1,"refined-carbon":1}},"boron-powder":{"o":"boron-powder","m":1,"i":{"boron-ore":2,"sulfuric-acid":1}},"battery-cathode":{"o":"battery-cathode","m":1,"i":{"lithium-metal":1,"cobalt-ingot":1,"oxygen-gas":2}},"catalyst-mesh":{"o":"catalyst-mesh","m":1,"i":{"stainless-steel":1,"platinum-ingot":1}},"uranium-oxide":{"o":"uranium-oxide","m":1,"i":{"uranium-ore":3,"sulfuric-acid":1}},"thorium-oxide":{"o":"thorium-oxide","m":1,"i":{"thorium-ore":3,"sulfuric-acid":1}},"liquid-hydrogen":{"o":"liquid-hydrogen","m":1,"i":{"hydrogen-ice":1}},"liquid-oxygen":{"o":"liquid-oxygen","m":1,"i":{"oxygen-ice":1}},"liquid-nitrogen":{"o":"liquid-nitrogen","m":1,"i":{"nitrogen-ice":1}},"hydrogen-gas":{"o":"hydrogen-gas","m":1,"i":{"liquid-hydrogen":1}},"oxygen-gas":{"o":"oxygen-gas","m":1,"i":{"liquid-oxygen":1}},"nitrogen-gas":{"o":"nitrogen-gas","m":1,"i":{"liquid-nitrogen":1}},"breathable-air":{"o":"breathable-air","m":1,"i":{"oxygen-gas":1,"nitrogen-gas":4}},"rocket-fuel":{"o":"rocket-fuel","m":1,"i":{"liquid-hydrogen":2,"liquid-oxygen":1}},"helium-tank":{"o":"helium-tank","m":1,"i":{"steel":1,"helium-gas":5}},"xenon-tank":{"o":"xenon-tank","m":1,"i":{"titanium-plate":1,"xenon-gas":5}},"liquid-helium":{"o":"liquid-helium","m":1,"i":{"helium-gas":3}},"hydrogen-storage-cell":{"o":"hydrogen-storage-cell","m":1,"i":{"palladium-ingot":1,"hydrogen-gas":4}},"silicon-wafer":{"o":"silicon-wafer","m":1,"i":{"pure-silicon":2}},"deuterium":{"o":"deuterium","m":1,"i":{"hydrogen-gas":10}},"enriched-uranium":{"o":"enriched-uranium","m":1,"i":{"uranium-oxide":5}},"uranium-233":{"o":"uranium-233","m":1,"i":{"thorium-fuel-rod":1}},"fusion-fuel-pellet":{"o":"fusion-fuel-pellet","m":1,"i":{"helium-3":1,"deuterium":1}},"flare":{"o":"flare","m":1,"i":{"magnesium-ingot":1,"iron-plate":1}},"igniter":{"o":"igniter","m":1,"i":{"copper-wire":1,"phosphorus-powder":1}},"lead-acid-battery":{"o":"lead-acid-battery","m":1,"i":{"lead-ingot":2,"sulfuric-acid":1,"polymer":1}},"lithium-battery":{"o":"lithium-battery","m":1,"i":{"battery-cathode":1,"graphite":1,"copper-sheet":1,"aluminum-sheet":1}},"electric-motor":{"o":"electric-motor","m":1,"i":{"neodymium-magnet":2,"copper-wire":4,"steel":2,"iron-plate":1}},"xenon-lamp":{"o":"xenon-lamp","m":1,"i":{"glass":1,"xenon-gas":1,"tungsten-powder":1,"copper-wire":1}},"fuel-cell":{"o":"fuel-cell","m":1,"i":{"catalyst-mesh":1,"polymer":2,"hydrogen-gas":2,"graphite":1}},"ion-thruster":{"o":"ion-thruster","m":1,"i":{"xenon-tank":1,"graphite":2,"copper-wire":4}},"neutron-detector":{"o":"neutron-detector","m":1,"i":{"helium-3":1,"steel":1,"copper-wire":2}},"control-rod":{"o":"control-rod","m":1,"i":{"boron-powder":2,"steel":1}},"fission-fuel-rod":{"o":"fission-fuel-rod","m":1,"i":{"enriched-uranium":2,"steel":1}},"thorium-fuel-rod":{"o":"thorium-fuel-rod","m":1,"i":{"thorium-oxide":2,"enriched-uranium":1,"steel":1}},"fur-2":{"o":"fur-2","m":1,"i":{"iron-plate":40,"copper-ingot":30,"refined-carbon":30,"glass":20,"copper-wire":20}},"fur-3":{"o":"fur-3","m":1,"i":{"titanium-plate":120,"galvanized-steel":100,"chrome-plating":80,"bronze":80,"lead-shielding":60,"nickel-plating":40,"solder":40}},"prs-2":{"o":"prs-2","m":1,"i":{"iron-plate":50,"iron-ingot":30,"copper-wire":25,"refined-carbon":15,"polymer":10}},"prs-3":{"o":"prs-3","m":1,"i":{"titanium-plate":140,"galvanized-steel":100,"magnesium-alloy":80,"brass":60,"rubber":50,"solder":40,"lead-acid-battery":20}},"chem-2":{"o":"chem-2","m":1,"i":{"iron-plate":35,"glass":30,"polymer":20,"copper-wire":20,"water":15,"oxygen-gas":10}},"chem-3":{"o":"chem-3","m":1,"i":{"chrome-plating":100,"nickel-plating":80,"rubber":80,"galvanized-steel":60,"sulfuric-acid":60,"brass":50,"lead-acid-battery":20}},"cryo-2":{"o":"cryo-2","m":1,"i":{"iron-plate":35,"copper-ingot":25,"glass":20,"polymer":15,"liquid-hydrogen":15,"liquid-oxygen":10}},"cryo-3":{"o":"cryo-3","m":1,"i":{"titanium-plate":100,"magnesium-alloy":80,"nickel-plating":80,"rubber":60,"liquid-nitrogen":60,"breathable-air":40,"lead-acid-battery":20}},"ref-2":{"o":"ref-2","m":1,"i":{"iron-plate":40,"glass":25,"copper-wire":25,"refined-carbon":20,"polymer":15,"hydrogen-gas":10}},"ref-3":{"o":"ref-3","m":1,"i":{"lead-shielding":120,"chrome-plating":80,"titanium-plate":80,"nickel-plating":60,"sulfuric-acid":50,"rubber":50,"lead-acid-battery":30}},"asm-2":{"o":"asm-2","m":1,"i":{"iron-plate":50,"copper-wire":40,"iron-ingot":20,"glass":15,"polymer":15}},"asm-3":{"o":"asm-3","m":1,"i":{"titanium-plate":120,"galvanized-steel":80,"magnesium-alloy":60,"solder":60,"brass":50,"rubber":50,"igniter":30,"lead-acid-battery":30}},"assembler-2":{"o":"assembler-2","m":1,"i":{"iron-plate":150,"copper-wire":100,"glass":80,"iron-ingot":80,"polymer":60,"refined-carbon":40}},"assembler-3":{"o":"assembler-3","m":1,"i":{"titanium-plate":400,"galvanized-steel":300,"magnesium-alloy":200,"chrome-plating":200,"bronze":150,"rubber":150,"solder":100,"lead-acid-battery":80}},"miner-2":{"o":"miner-2","m":1,"i":{"iron-plate":40,"copper-wire":25,"iron-ingot":20,"refined-carbon":15,"polymer":10}},"miner-3":{"o":"miner-3","m":1,"i":{"titanium-plate":100,"galvanized-steel":80,"chrome-plating":60,"mining-charge":60,"bronze":40,"rubber":40,"lead-acid-battery":20}},"fur-1":{"o":"fur-1","m":1,"i":{"silicon":10,"iron-ore":5}},"prs-1":{"o":"prs-1","m":1,"i":{"iron-ingot":15,"copper-ingot":5}},"chem-1":{"o":"chem-1","m":1,"i":{"iron-plate":15,"glass":10,"copper-wire":5}},"cryo-1":{"o":"cryo-1","m":1,"i":{"iron-plate":15,"copper-ingot":10,"glass":5}},"ref-1":{"o":"ref-1","m":1,"i":{"iron-plate":15,"glass":10,"copper-wire":10,"refined-carbon":5}},"asm-1":{"o":"asm-1","m":1,"i":{"iron-plate":15,"copper-wire":10}},"miner-1":{"o":"miner-1","m":1,"i":{"iron-ore":10,"copper-ore":5}},"station-1":{"o":"station-1","m":1,"i":{"iron-plate":30,"copper-wire":15,"glass":10}}},"buildings":{"miner-1":{"n":"Miner","k":"miner","s":null},"miner-2":{"n":"Miner","k":"miner","s":null},"miner-3":{"n":"Miner","k":"miner","s":null},"station-1":{"n":"Space Station","k":"station","s":20},"assembler-1":{"n":"Assembly Bay","k":"assembler","s":null},"assembler-2":{"n":"Assembly Bay","k":"assembler","s":null},"assembler-3":{"n":"Assembly Bay","k":"assembler","s":null},"lab-1":{"n":"Science Lab","k":"lab","s":null},"construct-1":{"n":"Building Crafter","k":"construct","s":null},"shipyard-1":{"n":"Ship Bay","k":"shipyard","s":null},"ops-1":{"n":"Operations Room","k":"ops","s":null},"contracts-1":{"n":"Contracts Office","k":"contracts","s":null}},"research":{"assembly-bay":{"i":{"iron-ore":1,"copper-ore":1}},"assembler":{"i":{"iron-ingot":1,"copper-ingot":1}},"floor-20":{"i":{"iron-plate":2,"iron-ingot":2}},"floor-75":{"i":{"titanium-plate":4,"galvanized-steel":4,"magnesium-alloy":2,"rubber":2}},"floor-250":{"i":{"superalloy":5,"tungsten-carbide":5,"neodymium-magnet":4,"borosilicate-glass":5,"lithium-battery":3,"gold-contacts":3}},"station-slots":{"i":{"iron-plate":2,"copper-wire":2,"glass":1}},"ship-bay":{"i":{"iron-plate":2,"copper-wire":1,"glass":1}},"tier-2-buildings":{"i":{}},"tier-3-buildings":{"i":{}},"auto-requests":{"i":{}}},"constructs":{"miner-1":{"i":{"iron-ore":10,"copper-ore":5}},"miner-2":{"i":{"iron-plate":40,"copper-wire":25,"iron-ingot":20,"refined-carbon":15,"polymer":10}},"miner-3":{"i":{"titanium-plate":100,"galvanized-steel":80,"chrome-plating":60,"mining-charge":60,"bronze":40,"rubber":40,"lead-acid-battery":20}},"station-1":{"i":{"iron-plate":30,"copper-wire":15,"glass":10}},"assembler-2":{"i":{"iron-plate":150,"copper-wire":100,"glass":80,"iron-ingot":80,"polymer":60,"refined-carbon":40}},"assembler-3":{"i":{"titanium-plate":400,"galvanized-steel":300,"magnesium-alloy":200,"chrome-plating":200,"bronze":150,"rubber":150,"solder":100,"lead-acid-battery":80}},"fur-1":{"i":{"silicon":10,"iron-ore":5}},"fur-2":{"i":{"iron-plate":40,"copper-ingot":30,"refined-carbon":30,"glass":20,"copper-wire":20}},"fur-3":{"i":{"titanium-plate":120,"galvanized-steel":100,"chrome-plating":80,"bronze":80,"lead-shielding":60,"nickel-plating":40,"solder":40}},"prs-1":{"i":{"iron-ingot":15,"copper-ingot":5}},"prs-2":{"i":{"iron-plate":50,"iron-ingot":30,"copper-wire":25,"refined-carbon":15,"polymer":10}},"prs-3":{"i":{"titanium-plate":140,"galvanized-steel":100,"magnesium-alloy":80,"brass":60,"rubber":50,"solder":40,"lead-acid-battery":20}},"chem-1":{"i":{"iron-plate":15,"glass":10,"copper-wire":5}},"chem-2":{"i":{"iron-plate":35,"glass":30,"polymer":20,"copper-wire":20,"water":15,"oxygen-gas":10}},"chem-3":{"i":{"chrome-plating":100,"nickel-plating":80,"rubber":80,"galvanized-steel":60,"sulfuric-acid":60,"brass":50,"lead-acid-battery":20}},"cryo-1":{"i":{"iron-plate":15,"copper-ingot":10,"glass":5}},"cryo-2":{"i":{"iron-plate":35,"copper-ingot":25,"glass":20,"polymer":15,"liquid-hydrogen":15,"liquid-oxygen":10}},"cryo-3":{"i":{"titanium-plate":100,"magnesium-alloy":80,"nickel-plating":80,"rubber":60,"liquid-nitrogen":60,"breathable-air":40,"lead-acid-battery":20}},"ref-1":{"i":{"iron-plate":15,"glass":10,"copper-wire":10,"refined-carbon":5}},"ref-2":{"i":{"iron-plate":40,"glass":25,"copper-wire":25,"refined-carbon":20,"polymer":15,"hydrogen-gas":10}},"ref-3":{"i":{"lead-shielding":120,"chrome-plating":80,"titanium-plate":80,"nickel-plating":60,"sulfuric-acid":50,"rubber":50,"lead-acid-battery":30}},"asm-1":{"i":{"iron-plate":15,"copper-wire":10}},"asm-2":{"i":{"iron-plate":50,"copper-wire":40,"iron-ingot":20,"glass":15,"polymer":15}},"asm-3":{"i":{"titanium-plate":120,"galvanized-steel":80,"magnesium-alloy":60,"solder":60,"brass":50,"rubber":50,"igniter":30,"lead-acid-battery":30}}}};
+  const STORE = 'aos-toolkit.v0.2';
+  const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
+  const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') } catch { return {} } })();
+  const SETTINGS = { importStacks: 5, exportStacks: 10, priority: 50, includeCraftedExports: true, enableWrites: false };
+  const settings = { ...SETTINGS, ...saved?.settings, enableWrites: false };
+  // v0.1 settings are intentionally not migrated: their meanings changed.
+  const state = {
+    opened:false, tab:'summary', loaded:false, stations:[], stationId:'', view:null, meta:null,
+    depositStatus:'unloaded', planets:[], depositNames:[], forecast:[], plan:[],
+    error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position||old?.position,
+    audit:[], serverLog:[], querySerial:0, compact:false, writing:false
+  };
+  const fmt = x => Number.isFinite(Number(x)) ? Number(x).toLocaleString('cs-CZ',{maximumFractionDigits:2}) : '–';
+  const num = (x, alt=0) => Number.isFinite(Number(x)) ? Number(x) : alt;
+  const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const item = id => GAME.items[id]?.n || id;
+  const stack = id => GAME.items[id]?.s || null;
+  const places = value => [value].flat().filter(Boolean);
+  const maxStack = (view,id) => Math.round(num(GAME.buildings[view?.station?.building]?.s,20) * (stack(id)||0));
+  const save = () => { try { localStorage.setItem(STORE,JSON.stringify({settings:{...settings,enableWrites:false},position:state.position})) } catch {} };
+  const makeId = (kind,resource) => `${kind}:${resource}`;
+  const checked = id => state.selected.has(id);
+  const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
+  const backup = () => ({version:'0.2.2',at:new Date().toISOString(),station:state.stationId,
+    groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
+  function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
+  async function api(path,body=undefined){
+    if(!/^\/api\/[a-z0-9/_.?=&%:-]+$/i.test(path) || path.split('?')[0].split('/').some(part=>part==='.'||part==='..'))throw new Error('Neplatná cesta API');
+    const c = new AbortController(), t = setTimeout(()=>c.abort(),15000);
+    try {
+      const response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',
+        headers:body===undefined?{'Accept':'application/json'}:{'Accept':'application/json','Content-Type':'application/json'},
+        ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:c.signal});
+      const json=await response.json().catch(()=>null);
+      if(!response.ok)throw new Error(String(json?.error||`HTTP ${response.status} ${path}`));
+      if(!json||typeof json!=='object'||Array.isArray(json))throw new Error('Server neposlal JSON objekt');
+      if(json.error || json.success===false || json.ok===false)throw new Error('Server odmítl požadavek');
+      return json;
+    } finally {clearTimeout(t)}
+  }
+  async function loadStations(){
+    if(state.processing)return;
+    const serial=++state.querySerial; state.processing=true;state.error='';state.notice='Načítám stanice…';render();
+    try {
+      const s=await api('/api/stations');if(serial!==state.querySerial)return;
+      if(!Array.isArray(s.stations))throw Error('Odpověď neobsahuje stations[]');
+      state.stations=s.stations;state.loaded=true;
+      if(!state.stations.some(x=>String(x.id)===state.stationId))state.stationId=String(s.stations[0]?.id||'');
+      if(state.stationId)await loadView(false);
+      state.notice=state.stationId?'Stanice a pravidla načteny':'Žádné stanice';
+    }catch(e){state.error=String(e.message||e)}finally{if(serial===state.querySerial){state.processing=false;render()}}
+  }
+  async function loadView(own=true){
+    if(state.writing || (own && state.processing))return;
+    const serial=own?++state.querySerial:state.querySerial;
+    if(!state.stationId){state.view=null;state.plan=[];state.selected.clear();state.depositStatus='unloaded';return}
+    if(own){state.error='';state.processing=true;state.notice='Načítám stanici…';render()}
+    const id=state.stationId;
+    try {
+      const v=await api('/api/stations/view?id='+encodeURIComponent(id));
+      if(serial!==state.querySerial||id!==state.stationId)return;
+      validateView(v,id);
+      state.view=v;state.plan=[];state.selected.clear();state.depositNames=[];state.planets=[];state.depositStatus='loading';
+      state.forecast=productionFlows(v);
+      await resolveDeposits(v,serial);
+      createPlan();state.notice='Detail načten · '+new Date().toLocaleTimeString('cs-CZ');
+    } catch(e){if(serial===state.querySerial){state.error=String(e.message||e);state.view=null}}
+    finally{if(own&&serial===state.querySerial){state.processing=false;render()}}
+  }
+  // Cross-check against the same world modules used by the game, not only currently built miners.
+  async function resolveDeposits(view,serial){
+    try {
+      state.meta=await api('/api/map/meta');
+      const seed=worldSeed(state.meta.seed);
+      const [map,world]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js')]);
+      const s=map.systemById(seed,view.station?.system);
+      if(!s)throw Error('Identifikátor systému nelze přeložit');
+      const generated=world.generateSystem(seed,s);
+      if(serial!==state.querySerial)return;
+      state.planets=generatedPlanets(generated,world);
+      state.depositNames=[...new Set(state.planets.flatMap(p=>p.deposits))].sort((a,b)=>item(a).localeCompare(item(b)));
+      state.depositStatus='ok';
+    }catch(e){
+      if(serial!==state.querySerial)return;
+      // Fail closed: never mistake existing miner list for *all* system deposits.
+      state.depositStatus='error: '+String(e.message||e);state.depositNames=[];state.planets=[];
+    }
+  }
+  function worldSeed(rawSeed){
+    if(rawSeed===null || rawSeed===undefined || (typeof rawSeed==='string' && rawSeed.trim()==='') || typeof rawSeed==='boolean' || !['string','number'].includes(typeof rawSeed))throw Error('Chybí platný seed');
+    const seed=Number(rawSeed);if(!Number.isSafeInteger(seed))throw Error('Chybí platný seed');
+    return seed;
+  }
+  function generatedPlanets(generated,world){
+    if(!Array.isArray(generated?.bodies))throw Error('Neznámý formát generovaných těles');
+    return generated.bodies.filter(b=>b?.letter).map(b=>{
+      if(!Array.isArray(b.deposits) || b.deposits.some(id=>typeof id!=='string'||!GAME.items[id]))throw Error('Neznámý formát nebo položka ložiska');
+      const richness=world.richnessOf(b);
+      if(!Number.isFinite(richness))throw Error('Neplatný těžební bonus');
+      return {letter:b.letter,kind:b.kind,richness,deposits:b.deposits.filter(id=>GAME.items[id].c==='raw')};
+    });
+  }
+  // Matches references/game-source/src/stockflow.js stationFlows, using the embedded catalog.
+  function productionFlows(view){
+    const rates=new Map(),mined=new Map();
+    const put=(id,key,rate)=>{if(!rates.has(id))rates.set(id,{resource:id,made:0,used:0});rates.get(id)[key]+=Math.max(0,num(rate))};
+    for(const r of view.requests||[]){
+      if(r.from?.includes('miners')&&r.state!=='off'&&r.state!=='full'&&num(r.perMinute)>0)mined.set(r.resource,Math.max(mined.get(r.resource)||0,num(r.perMinute)));
+    }
+    for(const [id,rate] of mined)put(id,'made',rate);
+    for(const m of view.machines||[]){
+      if(!m.on)continue;
+      const rate=num(m.perMinute);
+      if(m.bay){
+        for(const [id,n] of Object.entries(m.bay.flow?.in||{}))put(id,'used',n);
+        for(const [id,n] of Object.entries(m.bay.flow?.out||{}))put(id,'made',n);
+        for(const id of m.bay.makes||[])put(id,'made',0);
+      }else if(m.working??m.research){
+        const project=GAME.research[m.working??m.research];
+        if(project&&m.state!=='done'&&rate>0)for(const [id,n] of Object.entries(project.i||{}))put(id,'used',n*rate);
+      }else if(Array.isArray(m.orders)){
+        const craft=m.craft,build=craft&&!craft.done&&rate>0?GAME.constructs[craft.item]:null;
+        if(!build)continue;
+        for(const [id,n] of Object.entries(build.i||{}))put(id,'used',n*rate);
+        if(craft.to==='station')put(craft.item,'made',rate);
+      }else if(m.order){
+        if(m.order.state==='waiting'&&num(m.order.seconds)>0)for(const [id,n] of Object.entries(m.order.short||{}))put(id,'used',n*60/m.order.seconds);
+      }else{
+        const rec=GAME.recipes[m.recipe];
+        if(rec&&rate>0){put(rec.o,'made',rate);for(const [id,n] of Object.entries(rec.i||{}))put(id,'used',rate*num(n)/Math.max(1,num(rec.m,1)))}
+      }
+    }
+    return [...rates.values()].sort((a,b)=>item(a.resource).localeCompare(item(b.resource)));
+  }
+  function createPlan(){
+    const v=state.view;if(!v)return;
+    const deposits=state.depositNames,requestMap=new Map((v.requests||[]).map(r=>[r.resource,r]));
+    const exportsMap=new Map((v.exports||[]).map(r=>[r.resource,r]));
+    const raw=new Set(deposits);
+    const produced=new Set(state.forecast.filter(x=>x.made>x.used+0.01).map(x=>x.resource));
+    const exportIds=new Set([...raw,...(settings.includeCraftedExports?[...exportsMap.keys(),...produced]:[])]);
+    const proposal=[];
+    for(const id of deposits){
+      const s=stack(id);if(!s)continue;
+      const r=requestMap.get(id), target=5*s,from=['miners','stations'],actual=num(r?.amount,0), current=r?actual:null;
+      const changed=current!==target || !r || JSON.stringify(r.from)!==JSON.stringify(from) || (r.from||[]).includes('market');
+      proposal.push({id:makeId('request',id),kind:'request',resource:id,current,target,source:from,group:r?.group,
+        existing:r,change:changed?defaultChange(current,target):'same',modified:changed,reason:'Generované ložisko systému; i bez aktivního mineru',risk:[]});
+    }
+    for(const id of exportIds){
+      const s=stack(id);if(!s)continue;
+      const e=exportsMap.get(id),current=e?num(e.keeps?.stations??e.keep):null,target=10*s;
+      const changed=current!==target || !e || JSON.stringify(places(e.to))!==JSON.stringify(['stations']) || !!e.excess;
+      const p={id:makeId('export',id),kind:'export',resource:id,current,target,source:['stations'],group:e?.group,
+        existing:e,change:changed?defaultChange(current,target):'same',modified:changed,reason:raw.has(id)?'Surovina systému': 'Existující export / vlastní výroba',risk:[]};
+      if(raw.has(id))p.risk.push('Importní cíl je 5 stacků, exportní rezerva 10. Samotný import od minerů nemusí export nikdy naplnit.');
+      proposal.push(p);
+    }
+    // Preserve all other request types, including manufactured inputs: no implicit deletion.
+    state.plan=proposal.sort((a,b)=>a.kind.localeCompare(b.kind)||item(a.resource).localeCompare(item(b.resource)));
+    state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));
+    if(state.depositStatus!=='ok')state.selected.clear();
+  }
+  function selectedChanges(){return state.plan.filter(p=>p.modified&&checked(p.id))}
+  function payload(p){
+    if(!Number.isSafeInteger(p.target)||p.target<=0)throw Error('Neplatné množství pravidla');
+    const v=state.view;
+    const group=p.existing?.group??v.groups?.find(g=>g.kind===p.kind)?.id;
+    if(!group)throw Error('Pro '+p.kind+' chybí skupina; vytvoř ji nejprve ve hře.');
+    const basic={station:state.stationId,kind:p.kind,id:p.existing?.id,resource:p.resource,group};
+    if(p.kind==='request')return {...basic,amount:p.target,from:['miners','stations'],priority:Number.isFinite(Number(p.existing?.priority))?Number(p.existing.priority):settings.priority};
+    return {...basic,keep:p.target,keeps:{stations:p.target},to:['stations'],excess:false};
+  }
+  function validateView(v,id){
+    if(!v?.station || String(v.station.id)!==String(id) || !Array.isArray(v.requests) || !Array.isArray(v.exports) || !Array.isArray(v.stock))throw Error('Neznámý formát nebo jiná stanice');
+    for(const rules of [v.requests,v.exports]){
+      const seen=new Set();
+      for(const r of rules){
+        if(!r || typeof r.resource!=='string' || seen.has(r.resource))throw Error('Neplatná nebo duplicitní logistická pravidla');
+        seen.add(r.resource);
+      }
+    }
+  }
+  // Compare configuration only: live stock and machine rates can change between reads.
+  function configSignature(v){
+    const canonical=x=>Array.isArray(x)?x.map(canonical):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,canonical(x[k])])):x;
+    // Station views mix saved rule settings with live have/ETA/reserve/network fields.
+    // Only the client-confirmed persistent fields participate in the stale-preview check.
+    const fields=['id','resource','group','amount','from','priority','maxPrice','payFrom','below','keep','keeps','to','price','excess','inventoryKeep','line','on'];
+    const rules=rs=>rs.map(r=>Object.fromEntries(fields.filter(k=>k in r).map(k=>[k,r[k]]))).sort((a,b)=>String(a.id??a.resource).localeCompare(String(b.id??b.resource)));
+    const groups=(v.groups||[]).map(g=>Object.fromEntries(['id','kind','name','look','on','holds'].filter(k=>k in g).map(k=>[k,g[k]]))).sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+    return JSON.stringify(canonical({station:v.station?.id,groups,requests:rules(v.requests),exports:rules(v.exports)}));
+  }
+
+  function verifyRule(v,body){
+    const rules=body.kind==='request'?v.requests:v.exports;
+    const r=rules.find(r=>r.resource===body.resource && String(r.group)===String(body.group) && (body.id===undefined || String(r.id)===String(body.id)));
+    const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+    if(!r)return false;
+    if(body.kind==='request')return Number(r.amount)===body.amount && equal(r.from,body.from) && Number(r.priority)===body.priority;
+    return Number(r.keeps?.stations??r.keep)===body.keep && equal(places(r.to),body.to) && r.excess===false;
+  }
+  async function applySelected(){
+    if(state.processing || state.writing)return;
+    const changes=selectedChanges();if(!changes.length)return;
+    if(!settings.enableWrites){state.error='Nejdřív zapni možnost Zápis do hry.';render();return}
+    if(state.depositStatus!=='ok'){state.error='Generátor systému není ověřen. Zápis je zablokovaný.';render();return}
+    if(changes.length>120){state.error='Příliš mnoho změn v jedné dávce';render();return}
+    let bodies;
+    try{validateView(state.view,state.stationId);bodies=changes.map(payload)}catch(e){state.error=e.message;render();return}
+    const stationId=state.stationId,signature=configSignature(state.view);
+    const stationName=state.stations.find(x=>String(x.id)===stationId)?.systemName || 'vybraná stanice';
+    const warning=changes.some(p=>p.kind==='export'&&p.risk.length)?'\nPOZOR: cíl importu 5 stacků je menší než exportní rezerva 10 stacků. Export může zůstat neaktivní.':'';
+    if(!confirm(`AOS Toolkit: ${changes.length} změn logistiky na ${stationName}.\n\nZáloha se stáhne jako JSON. Jde o SKUTEČNÉ změny na serveru.${warning}\n\nPokračovat?`))return;
+    if(prompt('Pro potvrzení napiš přesně PROVEST:')!=='PROVEST'){state.notice='Zrušeno';render();return}
+    state.processing=true;state.writing=true;state.error='';state.serverLog=[];state.notice='Kontroluji aktuální konfiguraci…';render();
+    try{
+      const fresh=await api('/api/stations/view?id='+encodeURIComponent(stationId));validateView(fresh,stationId);
+      if(configSignature(fresh)!==signature)throw Error('Konfigurace se od náhledu změnila. Obnov detail a zkontroluj nový návrh');
+      state.view=fresh;
+      download(backup(),'aos-toolkit-backup-'+new Date().toISOString().slice(0,10)+'.json');
+      for(const [idx,body] of bodies.entries()){
+        if(state.stationId!==stationId)throw Error('Změna stanice během operace');
+        await api('/api/logistics/rule',body);
+        const savedView=await api('/api/stations/view?id='+encodeURIComponent(stationId));validateView(savedView,stationId);
+        if(!verifyRule(savedView,body))throw Error('Server nepotvrdil uložené hodnoty pravidla '+body.resource);
+        state.view=savedView;
+        state.serverLog.push({resource:body.resource,kind:body.kind,status:'verified'});
+        state.notice=`Ověřeno ${idx+1}/${bodies.length}`;render();
+        if(idx+1<bodies.length)await new Promise(r=>setTimeout(r,400));
+      }
+      state.notice=`Uloženo a ověřeno ${bodies.length} pravidel`;
+    }catch(e){state.error=`Zápis zastaven: ${e.message}. Některé změny již mohly být uloženy; ověř stav ve hře.`}
+    finally{
+      state.writing=false;state.processing=false;settings.enableWrites=false;save();
+      // Invalidate the preview after any attempt; another write requires a fresh read.
+      state.plan=[];state.selected.clear();state.depositStatus='unloaded';render();
+    }
+  }
+  function diagnostic(){
+    const v=state.view||{};
+    return {toolkit:'0.2.2',at:new Date().toISOString(),reference:GAME.version,
+      connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
+      counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
+        machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
+      schema:{station:Object.keys(v.station||{}),view:Object.keys(v),group:Object.keys(v.groups?.[0]||{}),
+        request:Object.keys(v.requests?.[0]||{}),export:Object.keys(v.exports?.[0]||{})},
+      resourceSummary:{systemRaw:state.depositNames,requests:(v.requests||[]).map(r=>({resource:r.resource,amount:r.amount,from:r.from})),
+        exports:(v.exports||[]).map(r=>({resource:r.resource,keep:r.keep,to:r.to})),
+        proposals:state.plan.map(p=>({kind:p.kind,resource:p.resource,current:p.current,target:p.target,change:p.change}))},
+      // Deliberately no full API response, account IDs, player names, session data or cookies.
+    };
+  }
+  const wrap=(html)=>`<div class="sect">${html}</div>`;
+  const card=(label,value)=>`<div class="metric"><strong>${esc(fmt(value))}</strong><small>${esc(label)}</small></div>`;
+  function summary(){
+    if(!state.view)return wrap('<p>Nejdřív klikni na Načíst / obnovit.</p>');
+    const v=state.view;const before=(v.stock||[]).reduce((s,r)=>s+num(r.units),0);
+    const issues=state.plan.filter(p=>p.modified).length;
+    return `<div class="metrics">${card('Druhů zásob',v.stock?.length||0)}${card('Importů',v.requests?.length||0)}${card('Exportů',v.exports?.length||0)}${card('Návrhů změn',issues)}</div>
+      ${wrap(`<b>Stanice</b><p>${esc(v.station?.systemName||v.station?.system||'Zvolená stanice')} · zásoby ${fmt(before)} ks · strojů ${fmt(v.machines?.length||0)} · minerálních toků ${fmt(v.miners?.length||0)}</p>`)}
+      ${wrap(`<b>Pravidla profilu</b><p>Import 5 stacků ze zdrojů Mineři → Stanice. Export nad rezervu 10 stacků pouze ostatním stanicím. Trh a inventář jsou vypnuté v navrhovaných pravidlech.</p><p><strong>Upozornění:</strong> Rezerva exportu 10 stacků převyšuje import 5 stacků. U těžené suroviny nemusí vznikat přebytek k exportu, pokud ji nedodává jiný tok.</p>`)}
+      ${wrap(`<b>Kontrola galaxie</b><p>${esc(state.depositStatus==='ok'?`Nalezeno ${state.depositNames.length} druhů ložisek na ${state.planets.length} planetách`:'Generátor: '+state.depositStatus)}</p>`)}`;
+  }
+  function resources(){
+    if(!state.view)return wrap('<p>Nejdříve načti stanici.</p>');
+    const req=new Map(state.view.requests.map(r=>[r.resource,r]));const exp=new Map(state.view.exports.map(r=>[r.resource,r]));
+    const rows=[...new Set([...state.view.stock.map(s=>s.resource),...req.keys(),...exp.keys()])].sort((a,b)=>item(a).localeCompare(item(b)));
+    return wrap(`<b>Zásoby a aktuální logistika</b><p>Zobrazení dat herního API; tabulka sama nic nemění.</p><div class="table"><table><thead><tr><th>Položka</th><th>Zásoba</th><th>Import / zdroje</th><th>Export / cíle</th></tr></thead><tbody>${rows.map(id=>{
+      const stock=num(state.view.stock.find(s=>s.resource===id)?.units);const r=req.get(id),e=exp.get(id);
+      return `<tr><td>${esc(item(id))}</td><td>${fmt(stock)}</td><td>${r?`${fmt(r.amount)} · ${esc(r.from?.join(' → '))}`:'—'}</td><td>${e?`${fmt(e.keep)} · ${esc(places(e.to).join(' → '))}`:'—'}</td></tr>`
+    }).join('')}</tbody></table></div>`);
+  }
+  function galaxy(){
+    if(!state.view)return wrap('<p>Vyber a načti stanici.</p>');
+    if(state.depositStatus!=='ok')return wrap(`<b>Generátor surovin nebyl načten</b><p>${esc(state.depositStatus)}.</p><p>Návrhy se nesmějí tvořit pouze podle aktivních minerů – nezachytily by netěžená ložiska.</p>`);
+    return `${wrap(`<b>Systémové suroviny (${state.depositNames.length})</b><p>Počítáno z herního seedu. Zahrnuje i planety bez mineru a případně již vyčerpaná ložiska; skutečný zbývající stav ukládá server.</p><p>${state.depositNames.map(id=>`${esc(item(id))} (T${GAME.items[id]?.t||'?'})`).join(' · ')}</p>`)}
+      ${wrap(`<b>Planety</b><div class="table"><table><thead><tr><th>Planeta</th><th>Typ</th><th>Těžební bonus</th><th>Ložiska</th></tr></thead><tbody>${state.planets.map(p=>`<tr><td>${esc(p.letter)}</td><td>${esc(p.kind)}</td><td>${Math.round((p.richness-1)*100)>=0?'+':''}${Math.round((p.richness-1)*100)} %</td><td>${esc(p.deposits.map(item).join(', '))}</td></tr>`).join('')}</tbody></table></div>`)}`;
+  }
+  function production(){
+    if(!state.view)return wrap('<p>Nejdříve načti stanici.</p>');
+    const stocks=new Map(state.view.stock.map(s=>[s.resource,num(s.units)]));
+    return wrap(`<b>Výrobní bilance</b><p>Orientační hodnoty/min pro aktuálně aktivní stroje, pokud API vrací jejich recepty či výrobní toky. Zpomalování kvůli chybějícím vstupům nemusí být plně zachyceno.</p><div class="table"><table><thead><tr><th>Položka</th><th>Příjem/min</th><th>Spotřeba/min</th><th>Čistý tok/min</th><th>Zásoba</th></tr></thead><tbody>${state.forecast.map(f=>`<tr><td>${esc(item(f.resource))}</td><td>${fmt(f.made)}</td><td>${fmt(f.used)}</td><td>${fmt(f.made-f.used)}</td><td>${fmt(stocks.get(f.resource)||0)}</td></tr>`).join('')}</tbody></table></div>`);
+  }
+  function proposals(){
+    if(!state.view)return wrap('<p>Nejprve načti stanici.</p>');
+    const changed=state.plan.filter(p=>p.modified).length;
+    const disabled=state.processing||state.depositStatus!=='ok';
+    return `${wrap(`<b>Návrh podle stacků</b><p>Import <strong>5 stacků</strong> (25 % kapacity 20stackové stanice), exportní rezerva <strong>10 stacků</strong> (50 %). Každý item má vlastní velikost stacku.</p>
+      <label class="tick"><input type="checkbox" id="crafted" ${settings.includeCraftedExports?'checked':''}> Navrhnout export i pro již exportované / vyráběné produkty</label>
+      <button data-act="recalc">Přepočítat</button><button data-act="selectAll">Vybrat změny</button><button data-act="selectNone">Odznačit</button>
+      <p>${changed} změn; vybráno ${selectedChanges().length}. Ostatní importy vyráběných položek se automaticky nemažou.</p>`)}
+      ${wrap(`<b>Importy</b>${state.plan.filter(p=>p.kind==='request').map(planRow).join('')||'<p>Žádná ložiska – ověř generátor.</p>'}`)}
+      ${wrap(`<b>Exporty</b>${state.plan.filter(p=>p.kind==='export').map(planRow).join('')||'<p>Žádné položky.</p>'}`)}
+      ${wrap(`<b>Uložit / testovat</b><p>Nejdřív zálohuj současná pravidla a ověř náhled. Serverové změny nejsou automaticky vratné. Zápisy jsou výchozí vypnuté.</p>
+       <label class="tick"><input type="checkbox" id="enableWrites" ${settings.enableWrites?'checked':''}> Povolit skutečný zápis vybraných pravidel na server</label>
+       <button data-act="exportPlan">Export návrhu</button><button data-act="backup">Stáhnout zálohu</button>
+       <button class="dangerbtn" data-act="apply" ${disabled||!settings.enableWrites?'disabled':''}>Použít vybraná pravidla (${selectedChanges().length})</button>
+       <p class="warning">Upozornění: Pokud mineři plní import jen na 5 stacků, nemusí nikdy překročit exportní rezervu 10 stacků. Toolkit zobrazí upozornění i před potvrzením zápisu.</p>`)}`;
+  }
+  function planRow(p){
+    return `<label class="plan ${p.modified?'':'same'}"><input type="checkbox" data-plan="${esc(p.id)}" ${checked(p.id)?'checked':''} ${!p.modified?'disabled':''}><span class="info"><strong>${esc(item(p.resource))}</strong> · ${esc(p.change)}<small>Současné směry: ${esc(places(p.kind==='request'?p.existing?.from:p.existing?.to).join(' → ')||'žádné')}</small><small>${p.current===null?'chybí':fmt(p.current)} → <b>${fmt(p.target)}</b> ks (${p.target/stack(p.resource)} stacků)</small><small>${esc(p.kind==='request'?'mineři → stanice':'pouze ostatní stanice')} · ${esc(p.reason)}</small>${p.risk.length?`<small class="caution">${esc(p.risk[0])}</small>`:''}</span></label>`;
+  }
+  function diagnostics(){
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.2.2 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+      <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
+      <button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
+      ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
+  }
+  function render(){
+    if(!state.root)return;
+    const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
+    if(!state.opened)return;
+    const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['diag','Diagnostika']];
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.2.2 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít">×</button></header>
+     <nav><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
+      <button data-act="refresh" ${state.processing?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
+     <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
+     <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
+     <main>${({summary,resources,galaxy,production,proposals,diag:diagnostics}[state.tab]||summary)()}</main>
+     <footer>All Out of Space · ${state.processing?'Probíhá operace':'Připraveno'} <button data-act="exportPlan">Export návrhů</button></footer>`;
+    panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;state.view=null;state.plan=[];state.selected.clear();loadView()});
+    panel.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;render()}));
+    panel.querySelectorAll('[data-act]').forEach(b=>b.addEventListener('click',()=>action(b.dataset.act)));
+    panel.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('change',()=>{if(state.processing)return;b.checked?state.selected.add(b.dataset.plan):state.selected.delete(b.dataset.plan);render()}));
+    panel.querySelector('#crafted')?.addEventListener('change',e=>{if(state.processing)return;settings.includeCraftedExports=e.target.checked;save();createPlan();render()});
+    panel.querySelector('#enableWrites')?.addEventListener('change',e=>{if(state.processing)return;settings.enableWrites=e.target.checked;save();render()});
+    panel.querySelector('#drag')?.addEventListener('pointerdown',drag);
+  }
+  async function action(name){
+    if(state.processing && !['hide','exportPlan','diag'].includes(name))return;
+    if(name==='hide'){state.opened=false;render();return}
+    if(name==='refresh'){await loadStations();return}
+    if(name==='recalc'){createPlan();render();return}
+    if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
+    if(name==='selectNone'){state.selected.clear();render();return}
+    if(name==='exportPlan'){download({version:'0.2.2',at:new Date().toISOString(),settings:{importStacks:5,exportStacks:10},
+      selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,risk:p.risk}))},'aos-toolkit-plan.json');return}
+    if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
+    if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
+    if(name==='apply'){await applySelected();return}
+  }
+  function drag(e){
+    if(e.button!==0||e.target.closest('button'))return;
+    const panel=state.root.getElementById('panel');const rect=panel.getBoundingClientRect(),p={x:e.clientX,y:e.clientY,left:rect.left,top:rect.top};
+    panel.setPointerCapture?.(e.pointerId);
+    const move=x=>{const left=Math.max(0,Math.min(innerWidth-100,p.left+x.clientX-p.x));const top=Math.max(0,Math.min(innerHeight-75,p.top+x.clientY-p.y));panel.style.left=left+'px';panel.style.top=top+'px';panel.style.right='auto';state.position={left,top}};
+    const stop=()=>{panel.removeEventListener('pointermove',move);panel.removeEventListener('pointerup',stop);panel.removeEventListener('pointercancel',stop);save()};
+    panel.addEventListener('pointermove',move);panel.addEventListener('pointerup',stop);panel.addEventListener('pointercancel',stop);
+  }
+  function mount(){
+    if(!document.body)return;
+    const host=document.createElement('div');host.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:2147483646';
+    const root=host.attachShadow({mode:'open'});state.root=root;
+    const style=document.createElement('style');style.textContent=`
+      *{box-sizing:border-box}button,input,select{font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}
+      [hidden]{display:none!important}#fab{pointer-events:auto;position:fixed;right:18px;bottom:22px;background:#163a49;border:1px solid #38a0b0;color:#e8fcff;font-weight:bold;border-radius:15px;width:57px;height:57px;box-shadow:0 8px 28px #0008}
+      #panel{pointer-events:auto;position:fixed;right:16px;top:55px;width:min(650px,calc(100vw - 18px));min-height:350px;max-height:calc(100vh - 75px);display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #446474;border-radius:12px;box-shadow:0 15px 45px #000b;font:12px/1.45 system-ui,Arial,sans-serif;overflow:hidden}
+      header{padding:12px 14px;background:#1a3544;display:flex;align-items:center;justify-content:space-between;cursor:move;touch-action:none;user-select:none}header div{display:grid}header b{font-size:15px}header small{font-size:11px;color:#afc6d1}header button{background:#273d49;color:#fff;border:1px solid #56717b;border-radius:6px;font-size:20px;width:30px;height:30px}
+      nav{display:flex;gap:7px;padding:10px 12px}nav select{flex:1;min-width:0;background:#182e3b;border:1px solid #587080;border-radius:6px;color:#fff;padding:7px}button[data-act]{background:#21586a;color:#e4faff;border:1px solid #3b91a0;padding:6px 9px;border-radius:6px}button[data-act]:hover{filter:brightness(1.15)}
+      .status{padding:7px 12px;background:#203745;color:#b5dae5;font-size:11px}.err{color:#ffb4a8}.tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid #395666;padding:3px 8px}.tabs button{background:transparent;border:0;border-bottom:2px solid transparent;color:#b5c8d5;padding:7px 9px}.tabs button.active{color:#fff;border-color:#61c2d7}
+      main{flex:1;overflow:auto;min-height:120px;padding:11px;overscroll-behavior:contain}.sect{border-bottom:1px solid #294250;padding:6px 0 12px;margin-bottom:8px}.sect>b{display:block;font-size:13px}.sect p{color:#b6cad5;margin:7px 0}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#1b3340;border:1px solid #365666;padding:9px 5px;border-radius:6px;text-align:center}.metric strong{display:block;font-size:21px}.metric small{font-size:10px;color:#b8d3d7}
+      .table{overflow:auto;margin:8px 0}.table table{border-collapse:collapse;min-width:440px;width:100%;font-size:11px}.table th,.table td{padding:7px;text-align:left;border-bottom:1px solid #34505c;vertical-align:top}.table th{background:#1e3543;color:#b5e6ed}
+      .plan{display:flex;align-items:flex-start;gap:9px;padding:8px 6px;border:1px solid #314f5f;border-radius:7px;margin-top:5px}.plan.same{opacity:.55}.plan input{margin-top:3px}.info{flex:1}.info strong{color:#e7f9ff}.info small{display:block;color:#a9c7d2}.info b{color:#fff}.caution{color:#ffcc7b!important}.tick{display:flex;gap:8px;align-items:center;margin:8px 0}.warning{padding:9px;background:#4b3b20;border-radius:7px;color:#ffde9b}.dangerbtn{background:#762b30!important;border-color:#c85656!important}pre{overflow:auto;background:#162f3b;padding:9px}footer{display:flex;justify-content:space-between;align-items:center;font-size:10px;padding:8px 12px;background:#1a303e;color:#b4c8d3}
+      @media(max-width:670px){#panel{top:8px;left:8px!important;right:8px!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
+    const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit';fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
+    const panel=document.createElement('section');panel.id='panel';panel.hidden=true;
+    if(state.position){panel.style.left=state.position.left+'px';panel.style.top=state.position.top+'px';panel.style.right='auto'}
+    root.append(style,fab,panel);document.body.append(host);state.host=host;render();
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
+})();
