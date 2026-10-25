@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.4.0
+// @version      0.4.1
 // @description  Progression advisor, Smart Logistics, Resource X-Ray, planet inspector and client camera tools (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
@@ -117,8 +117,13 @@ function createDebugTools({catalog,api,getGame,loadWorld,doc,onChange=()=>{},
     for(const planet of snapshot.planets){
       const p=screenPlanet(game,planet);if(!p||p.x<0||p.y<0||p.x>rect.width||p.y>rect.height)continue;
       const x=rect.left+p.x,y=rect.top+p.y;
-      overlay.appendChild(label(planet.letter+' · '+planet.resources.map(r=>r.name+' T'+r.tier).join(', '),
-        {left:Math.max(rect.left,Math.min(rect.right-200,x+numRadius(p.r)+6))+'px',top:Math.max(rect.top,Math.min(rect.bottom-55,y))+'px'}));
+      const tiers=new Map();
+      for(const r of planet.resources){if(!tiers.has(r.tier))tiers.set(r.tier,[]);tiers.get(r.tier).push(r.name)}
+      const lines=[planet.letter,...[...tiers].sort(([a],[b])=>a-b).flatMap(([tier,names])=>['T'+tier,...names])];
+      const badge=label(lines.join('\n'),{left:(x+numRadius(p.r)+6)+'px',top:y+'px'});overlay.appendChild(badge);
+      const measured=badge.getBoundingClientRect?.(),width=measured?.width||200,height=measured?.height||lines.length*15+10;
+      badge.style.left=Math.max(rect.left,Math.min(rect.right-width,x+numRadius(p.r)+6))+'px';
+      badge.style.top=Math.max(rect.top,Math.min(rect.bottom-height,y))+'px';
     }
   }
   function numRadius(r){return finite(r)?Math.max(0,r):0}
@@ -319,7 +324,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
   const state = {
     opened:false, tab:'summary', loaded:false, stations:[], stationId:'', view:null, meta:null,
     depositStatus:'unloaded', planets:[], depositNames:[], forecast:[], plan:[],
-    error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position||old?.position,
+    error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position||old?.position, windowSize:saved?.windowSize||null,
     audit:[], serverLog:[], querySerial:0, compact:false, writing:false
   };
   const debugTools=createDebugTools({catalog:GAME,api,getGame:()=>window.spacefactory,doc:document,onChange:()=>render(),
@@ -334,11 +339,11 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
   const stack = id => GAME.items[id]?.s || null;
   const places = value => [value].flat().filter(Boolean);
   const maxStack = (view,id) => Math.round(num(GAME.buildings[view?.station?.building]?.s,20) * (stack(id)||0));
-  const save = () => { try { localStorage.setItem(STORE,JSON.stringify({settings:{...settings,enableWrites:false},position:state.position})) } catch {} };
+  const save = () => { try { localStorage.setItem(STORE,JSON.stringify({settings:{...settings,enableWrites:false},position:state.position,windowSize:state.windowSize})) } catch {} };
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.4.0',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.4.1',at:new Date().toISOString(),station:state.stationId,
     groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -558,7 +563,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.4.0',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.4.1',at:new Date().toISOString(),reference:GAME.version,
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -674,7 +679,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     render();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.4.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.4.1 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
@@ -684,7 +689,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
     const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['advisor','Poradce'],['debug','Debug'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.4.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít">×</button></header>
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.4.1 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
@@ -721,7 +726,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     if(name==='recalc'){createPlan();render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.4.0',at:new Date().toISOString(),settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'0.4.1',at:new Date().toISOString(),settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,risk:p.risk}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -742,19 +747,37 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     const style=document.createElement('style');style.textContent=`
       *{box-sizing:border-box}button,input,select{font:inherit}button{cursor:pointer}button:disabled{opacity:.5;cursor:not-allowed}
       [hidden]{display:none!important}#fab{pointer-events:auto;position:fixed;right:18px;bottom:22px;background:#163a49;border:1px solid #38a0b0;color:#e8fcff;font-weight:bold;border-radius:15px;width:57px;height:57px;box-shadow:0 8px 28px #0008}
-      #panel{pointer-events:auto;position:fixed;right:16px;top:55px;width:min(650px,calc(100vw - 18px));min-height:350px;max-height:calc(100vh - 75px);display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #446474;border-radius:12px;box-shadow:0 15px 45px #000b;font:12px/1.45 system-ui,Arial,sans-serif;overflow:hidden}
+      #panel{pointer-events:auto;position:fixed;right:16px;top:55px;width:min(650px,calc(100vw - 18px));min-width:min(320px,calc(100vw - 16px));max-width:calc(100vw - 16px);min-height:min(350px,calc(100vh - 75px));max-height:calc(100vh - 75px);resize:both;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #446474;border-radius:12px;box-shadow:0 15px 45px #000b;font:12px/1.45 system-ui,Arial,sans-serif;overflow:hidden}
       header{padding:12px 14px;background:#1a3544;display:flex;align-items:center;justify-content:space-between;cursor:move;touch-action:none;user-select:none}header div{display:grid}header b{font-size:15px}header small{font-size:11px;color:#afc6d1}header button{background:#273d49;color:#fff;border:1px solid #56717b;border-radius:6px;font-size:20px;width:30px;height:30px}
+      #panel header button[data-act="hide"]{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif;flex-shrink:0}
       nav{display:flex;gap:7px;padding:10px 12px}nav select{flex:1;min-width:0;background:#182e3b;border:1px solid #587080;border-radius:6px;color:#fff;padding:7px}button[data-act],button[data-debug],button[data-advisor]{background:#21586a;color:#e4faff;border:1px solid #3b91a0;padding:6px 9px;border-radius:6px}button[data-act]:hover,button[data-debug]:hover,button[data-advisor]:hover{filter:brightness(1.15)}
       .status{padding:7px 12px;background:#203745;color:#b5dae5;font-size:11px}.err{color:#ffb4a8}.tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid #395666;padding:3px 8px}.tabs button{background:transparent;border:0;border-bottom:2px solid transparent;color:#b5c8d5;padding:7px 9px}.tabs button.active{color:#fff;border-color:#61c2d7}
       main{flex:1;overflow:auto;min-height:120px;padding:11px;overscroll-behavior:contain}.sect{border-bottom:1px solid #294250;padding:6px 0 12px;margin-bottom:8px}.sect>b{display:block;font-size:13px}.sect p{color:#b6cad5;margin:7px 0}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#1b3340;border:1px solid #365666;padding:9px 5px;border-radius:6px;text-align:center}.metric strong{display:block;font-size:21px}.metric small{font-size:10px;color:#b8d3d7}
       .table{overflow:auto;margin:8px 0}.table table{border-collapse:collapse;min-width:440px;width:100%;font-size:11px}.table th,.table td{padding:7px;text-align:left;border-bottom:1px solid #34505c;vertical-align:top}.table th{background:#1e3543;color:#b5e6ed}
       .plan{display:flex;align-items:flex-start;gap:9px;padding:8px 6px;border:1px solid #314f5f;border-radius:7px;margin-top:5px}.plan.same{opacity:.55}.plan input{margin-top:3px}.info{flex:1}.info strong{color:#e7f9ff}.info small{display:block;color:#a9c7d2}.info b{color:#fff}.caution{color:#ffcc7b!important}.tick{display:flex;gap:8px;align-items:center;margin:8px 0}.warning{padding:9px;background:#4b3b20;border-radius:7px;color:#ffde9b}.dangerbtn{background:#762b30!important;border-color:#c85656!important}pre{overflow:auto;background:#162f3b;padding:9px}footer{display:flex;justify-content:space-between;align-items:center;font-size:10px;padding:8px 12px;background:#1a303e;color:#b4c8d3}
       #debug-system,#debug-planet,[id^="advisor-"]{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
-      @media(max-width:670px){#panel{top:8px;left:8px!important;right:8px!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
+      @media(max-width:670px){#panel{top:8px;left:8px!important;right:auto!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
     const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit';fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
     const panel=document.createElement('section');panel.id='panel';panel.hidden=true;
     if(state.position){panel.style.left=state.position.left+'px';panel.style.top=state.position.top+'px';panel.style.right='auto'}
+    if(state.windowSize){
+      const {width,height}=state.windowSize;
+      if(Number.isFinite(width)&&Number.isFinite(height)&&width>0&&height>0){
+        panel.style.width=Math.min(Math.max(320,width),Math.max(1,innerWidth-16))+'px';
+        panel.style.height=Math.min(Math.max(350,height),Math.max(1,innerHeight-75))+'px';
+      }
+    }
     root.append(style,fab,panel);document.body.append(host);state.host=host;render();
+    if(typeof ResizeObserver==='function'){
+      let resizeSave;
+      new ResizeObserver(()=>{
+        // Native resize sets inline dimensions; content-driven automatic sizes stay automatic.
+        if(!panel.style.width||!panel.style.height)return;
+        const rect=panel.getBoundingClientRect();if(!(rect.width>0&&rect.height>0))return;
+        state.windowSize={width:Math.round(rect.width),height:Math.round(rect.height)};
+        clearTimeout(resizeSave);resizeSave=setTimeout(save,250);
+      }).observe(panel);
+    }
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 })();
