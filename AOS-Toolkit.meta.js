@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.2.2
-// @description  Smart Logistics profiles, confirmed API writes, galaxy resources, production and diagnostics (CZ)
+// @version      0.3.0
+// @description  Smart Logistics, Resource X-Ray, planet inspector, client camera tools and diagnostics (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
 // @updateURL    https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.meta.js
