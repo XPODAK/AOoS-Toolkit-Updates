@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.10.0
-// @description  Market Assistant, Factory Planner, Expansion Advisor and approved logistics (CZ)
+// @version      1.0.0
+// @description  Unified Journey Advisor, Market, Factory, Expansion and approved logistics (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
 // @updateURL    https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.meta.js
@@ -352,6 +352,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,loadAccoun
       if(!stationId)throw Error('Nejprve vyber vlastní stanici.');
       const [view,research,rules]=await Promise.all([api('/api/stations/view?id='+encodeURIComponent(stationId)),api('/api/research'),loadRules()]);
       if(ticket!==serial)return null;
+      if(view?.station?.mine===false)throw Error('Vybraná stanice již není vlastní.');
       if(String(view?.station?.id)!==String(stationId))throw Error('Server vrátil jinou stanici');
       let account=null;
       if(state.includeAccount&&loadAccount){
@@ -1264,16 +1265,148 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
   }
   return {state,refresh,calculate,edit,invalidate,cancel};
 }
-  const STORE = 'aos-toolkit.v0.2';
-  const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
-  const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') } catch { return {} } })();
-  const SETTINGS = { importStacks: 5, exportStacks: 10, priority: 50, includeCraftedExports: true, enableWrites: false };
-  const settings = { ...SETTINGS, ...saved?.settings, enableWrites: false };
-  // v0.1 settings are intentionally not migrated: their meanings changed.
+// Unified advisory workflow, explicit evidence states and safe preference migration.
+const TOOLKIT_DEFAULTS={importStacks:5,exportStacks:10,priority:50,includeCraftedExports:true,enableWrites:false};
+function migrateToolkitStorage(raw,{source='current',legacyPosition=null}={}){
+  const record=x=>x&&typeof x==='object'&&!Array.isArray(x),warnings=[];let value=raw,canSave=true;
+  try{if(typeof raw==='string')value=JSON.parse(raw)}catch{value=null;canSave=source==='legacy';warnings.push('Uložený JSON je neplatný; originál nebyl přepsán.')}
+  if(value!==null&&value!==undefined&&!record(value)){value=null;canSave=source==='legacy';warnings.push('Neplatný formát nastavení.')}
+  if(record(value)&&value.schemaVersion!==undefined&&value.schemaVersion!==1){canSave=false;warnings.push('Neznámá verze nastavení; ukládání je vypnuté a originál zůstává zachovaný.');value=null}
+  const data={schemaVersion:1,toolkitVersion:'1.0.0',settings:{...TOOLKIT_DEFAULTS},exploredMinimized:false};
+  if(record(value?.settings)){
+    for(const [k,min,max] of [['importStacks',1,10000],['exportStacks',1,10000],['priority',0,100]])if(Number.isSafeInteger(value.settings[k])&&value.settings[k]>=min&&value.settings[k]<=max)data.settings[k]=value.settings[k];
+    if(typeof value.settings.includeCraftedExports==='boolean')data.settings.includeCraftedExports=value.settings.includeCraftedExports;
+  }
+  const position=v=>record(v)&&['left','top'].every(k=>typeof v[k]==='number'&&Number.isFinite(v[k])&&Math.abs(v[k])<=1e7)?{left:v.left,top:v.top}:null;
+  const size=v=>record(v)&&['width','height'].every(k=>typeof v[k]==='number'&&Number.isFinite(v[k])&&v[k]>0&&v[k]<=100000)?{width:v.width,height:v.height}:null;
+  for(const key of ['position','fabPosition','exploredPosition']){const p=position(value?.[key]??(key==='position'?legacyPosition:null));if(p)data[key]=p}
+  for(const key of ['windowSize','exploredSize']){const p=size(value?.[key]);if(p)data[key]=p}
+  if(typeof value?.exploredMinimized==='boolean')data.exploredMinimized=value.exploredMinimized;
+  return {data,canSave,warnings,migrated:source==='legacy'};
+}
+function projectToolkitInterfaces(rules){
+  const take=(v,keys)=>Object.fromEntries(keys.map(k=>[k,v[k]??null]));
+  const rows=(list,keys)=>list.map(v=>take(v,keys)).sort((a,b)=>a.id.localeCompare(b.id));
+  return {recipes:rows(rules.RECIPES,['id','machine','level','seconds','makes','building','research']),buildings:rows(rules.BUILDINGS,['id','kind','tier','speed','stacks','slots','floor','research','mines','drain']),
+    machines:rows(rules.BAY_MACHINES,['id','kind','tier','speed','productivity','w','d']),projects:rows(rules.PROJECTS,['id','scope','steps','seconds','credits','requires']),tickMs:rules.TICK_MS,marketLimits:rules.LIMITS};
+}
+function auditToolkitInterfaces(catalog,rules,at,baseline=null){
+  const issues=[],seen=new Set(),pairs=o=>JSON.stringify(Object.entries(o||{}).sort(([a],[b])=>a.localeCompare(b)));
+  for(const key of ['RECIPES','PROJECTS','BUILDINGS','ITEMS'])if(!Array.isArray(rules?.[key]))issues.push('Chybí export '+key);
+  for(const key of ['stackSize','researchAt','isDone','buildingById'])if(typeof rules?.[key]!=='function')issues.push('Chybí funkce '+key);
+  if(issues.length)return {ok:false,at,issues,scope:'catalog-and-exports'};
+  for(const r of rules.RECIPES){
+    const old=catalog.recipes[r.id];if(seen.has(r.id))issues.push('Duplicitní recept '+r.id);seen.add(r.id);
+    if(!old||old.o!==r.output||old.m!==r.makes||pairs(old.i)!==pairs(r.inputs))issues.push('Změněný recept '+r.id);
+  }
+  for(const id of Object.keys(catalog.recipes))if(!seen.has(id))issues.push('Chybí recept '+id);
+  const items=new Set(rules.ITEMS.map(i=>i.id));for(const [id,item] of Object.entries(catalog.items))if(!items.has(id)||rules.stackSize(id)!==item.s)issues.push('Změněný stack/položka '+id);
+  for(const id of items)if(!catalog.items[id])issues.push('Nová položka '+id);
+  for(const [id,b] of Object.entries(catalog.buildings)){const live=rules.buildingById(id);if(!live||live.kind!==b.k||(b.s!==null&&b.s!==undefined&&live.stacks!==b.s))issues.push('Změněná budova '+id)}
+  if(baseline){try{const live=projectToolkitInterfaces(rules);for(const key of Object.keys(baseline))if(JSON.stringify(baseline[key])!==JSON.stringify(live[key]))issues.push('Změněná pravidla '+key)}catch{issues.push('Chybí exporty pro kontrolu mechanik.')}}
+  const projects=new Map(rules.PROJECTS.map(p=>[p.id,p]));for(const [id,p] of Object.entries(catalog.research))if(!projects.has(id)||pairs(p.i)!==pairs(projects.get(id).inputs))issues.push('Změněné vstupy výzkumu '+id);
+  return {ok:issues.length===0,at,issues,scope:'recipe inputs/output/makes, item stacks, known buildings/stacks, research inputs and required exports',
+    counts:{recipes:rules.RECIPES.length,items:rules.ITEMS.length,projects:rules.PROJECTS.length},warning:'Nejde o kontrolu všech serverových endpointů ani důkaz kompatibility všech mechanik.'};
+}
+function buildJourneyPlan({catalog,config,progress,factory=null,market=null,expansion=null,failures=[],previous=null,at,stale=false}){
+  if(!progress?.station||progress.station.id!==config.stationId||!progress.materialPlan||!Array.isArray(progress.choices))throw Error('Neověřený podklad vybrané stanice.');
+  const name=id=>catalog.items[id]?.n||id,material=progress.materialPlan,steps=[];
+  const add=(id,phase,status,title,detail,action,extra={})=>steps.push({id,phase,status,title,detail,action,...extra});
+  const researchId=config.projectId||progress.target?.desired||progress.target?.id;
+  const goal=config.goal==='research'?{kind:'research',id:researchId,name:progress.choices.find(p=>p.id===researchId)?.name||researchId}:
+    {kind:'production',id:config.itemId,name:name(config.itemId),quantity:config.quantity};
+  if(!goal.id)throw Error('Nepodařilo se určit konkrétní cíl.');
+  if(goal.kind==='production'&&(progress.target?.id!==goal.id||progress.target?.quantity!==config.quantity))throw Error('Materiálový podklad patří jinému cíli.');
+  const held=goal.kind==='production'?material.usedStock?.[goal.id]||0:null;
+  const complete=goal.kind==='research'?progress.choices.some(p=>p.id===goal.id&&p.done===true):held>=goal.quantity;
+  add('goal:'+goal.id,'then',complete?'done':'pending',goal.name,goal.kind==='production'?`V cílové stanici ověřeno ${held}/${goal.quantity} ks. Jde o aktuální zásobu, nikoliv celoživotně vyrobené množství.`:'Dokončení se řídí stavem výzkumu v kontextu této stanice.','advisor');
+  if(progress.account&&!progress.account.inventoryComplete)add('account','now','unknown','Doplň chybějící stanice',`Načteno ${progress.account.loaded}/${progress.account.total}; chybějící zásoby nejsou nula.`,'account');
+  for(const [id,n] of Object.entries(material.rawMissing||{}))if(n>0)add('raw:'+id,'now',progress.account&&!progress.account.inventoryComplete?'unknown':'pending','Zajisti '+name(id),`Zbytkový materiálový požadavek ${n} ks po skladu a podmíněných dodávkách. Nejde o trvalý tok.`,'mining',{resource:id});
+  for(const t of (material.externalTransfers||[]).slice(0,30))add('transfer:'+t.station+':'+t.resource,'now','review','Prověř vlastní dodávku '+name(t.resource),`${t.amount} ks ze stanice ${t.name||t.station}. Přebytek je pouze kandidát, nikoliv uskutečněný přesun.`,'account',{resource:t.resource});
+  for(const b of material.blocked||[])add('blocked:'+b.resource,'now','blocked','Najdi jiný zdroj '+name(b.resource),b.reason,'market',{resource:b.resource,amount:b.amount});
+  const researchIds=new Set((material.crafts||[]).map(c=>c.research).filter(Boolean));
+  if((material.crafts||[]).some(c=>!c.building))researchIds.add('assembly-bay');
+  if((material.crafts||[]).some(c=>c.machine==='assembler'&&!c.building))researchIds.add('assembler');
+  if(goal.kind==='research')researchIds.add(goal.id);
+  if(progress.target?.kind==='research')researchIds.add(progress.target.id);
+  for(const old of previous?.steps||[])if(old.id.startsWith('research:')&&(!complete||progress.choices.some(p=>p.id===old.id.slice(9)&&p.done===true)))researchIds.add(old.id.slice(9));
+  const visit=id=>{const p=progress.choices.find(x=>x.id===id);for(const dep of p?.missingPrerequisites||[])if(!researchIds.has(dep)){researchIds.add(dep);visit(dep)}};for(const id of [...researchIds])visit(id);
+  for(const id of researchIds){const p=progress.choices.find(x=>x.id===id);add('research:'+id,'then',p?.done===true?'done':!p?'unknown':p.available?'pending':'blocked',p?.name||id,p?.done?'Výzkum je v čerstvém snímku dokončený.':`Ověř výzkumné vstupy a návaznosti${p?.missingPrerequisites?.length?': '+p.missingPrerequisites.join(', '):''}.`,'advisor')}
+  for(const c of material.crafts||[])add('craft:'+c.resource,'then',c.research&&!progress.choices.some(p=>p.id===c.research&&p.done)?'blocked':'pending','Vyrob '+name(c.resource),`${c.amount} ks, ${c.batches} základních dávek; skutečný výkon a odvod je nutné ověřit.`,'factory',{resource:c.resource});
+  const missing=goal.kind==='production'?Math.max(0,goal.quantity-held):null;
+  if(config.withFactory&&!complete&&goal.kind==='production'){
+    const valid=factory?.station?.id===config.stationId&&factory.target?.id===goal.id&&factory.target.rate===config.rate;
+    add('capacity','then',!valid?'unknown':!factory.evidence?.capacityComplete?'unknown':factory.bottlenecks.length?'blocked':'review','Ověř výrobní kapacitu',valid?`${config.rate} ks/min pro plánované modely. ${factory.bottlenecks.length} podmíněných úzkých míst. Shoda nominálních kapacit nepotvrzuje dodávky.`:'Kapacity pro stejnou stanici, produkt a výkon nebyly ověřené.','factory');
+  }
+  if(config.withMarket&&!complete&&goal.kind==='production'){
+    const s=market?.snapshot,valid=market?.stationId===config.stationId&&s?.target?.id===goal.id&&s.target.quantity===missing;
+    add('economics','now',valid&&s.buy.known&&s.buy.full?'review':'unknown','Porovnej nákup a výrobu',valid?`Ocenění chybějících ${missing} ks. ${s.manufacture.full?'Raw koš je oceněný.':'Raw koš nemá úplné ocenění.'} Nejde o nákup ani potvrzený čistý zisk.`:'Tržní data pro stejný chybějící počet nebyla ověřena.','market');
+  }
+  const needs=Object.values(material.rawMissing||{}).some(n=>n>0);
+  let candidates=[];
+  if(!complete&&needs){
+    const expected=Object.entries(material.rawMissing||{}).filter(([,n])=>n>0).sort(([a],[b])=>a.localeCompare(b));
+    const actual=Array.isArray(expansion?.context?.needs)?expansion.context.needs.map(n=>[n.resource,n.amount]).sort(([a],[b])=>a.localeCompare(b)):null;
+    const valid=expansion?.context?.station?.id===config.stationId&&expansion.context.at===progress.at&&expansion.context.target.id===progress.target?.id&&JSON.stringify(expected)===JSON.stringify(actual);
+    if(valid)candidates=(expansion.rows||[]).filter(r=>r.site?.eligible===true&&Number.isFinite(r.site.coverage)&&r.site.coverage>0&&r.site.coverage<=1&&r.system?.id===r.id&&Number.isFinite(r.system.x)&&Number.isFinite(r.system.y)&&Number.isFinite(r.distance)&&r.distance>=0).slice(0,5).map(r=>({id:r.id,name:r.name||r.id,coverage:r.site.coverage,distance:r.distance,system:r.system}));
+    add('base','base',candidates.length?'review':config.withExpansion?'unknown':'pending','Další základna',candidates.length?'Ověřené podmíněné lokality pokrývají část materiálového cíle. Ověření není provedená stavba.':config.withExpansion?'V omezeném výběru nebyla ověřena vhodná lokalita. To neprokazuje, že žádná neexistuje.':'Hledání spusť jen pro konkrétní zbývající potřeby; dosud nebylo provedeno.','expansion');
+  }else add('base','base','review','Další základna nyní není odůvodněná',complete?'Aktuální cíl je ve snímku splněný.':'Po skladu a kandidátech dodávek nejsou odvozené raw potřeby. To nepotvrzuje úplnou soběstačnost.','expansion');
+  const old=new Map((previous?.steps||[]).map(s=>[s.id,s]));
+  for(const step of steps){step.newlyCompleted=step.status==='done'&&old.has(step.id)&&old.get(step.id).status!=='done';step.regressed=step.status!=='done'&&old.get(step.id)?.status==='done'}
+  const ids=new Set(steps.map(s=>s.id)),archived=(previous?.steps||[]).filter(s=>!ids.has(s.id)&&s.status!=='replanned').slice(0,20).map(s=>({...s,status:'replanned',newlyCompleted:false,regressed:false,detail:'Krok nahradil nový přepočet. Z jeho zmizení nevyplývá dokončení.'}));
+  return {format:1,at,station:progress.station,goal,complete,stale,steps:[...steps,...archived],candidates,failures,
+    sources:{progress:progress.at,account:progress.account?.at||null,factory:factory?.at||null,market:market?.snapshot?.at||null,expansion:expansion?.at||null},
+    transferCoverage:{shown:Math.min(30,material.externalTransfers?.length||0),total:material.externalTransfers?.length||0},
+    warnings:['Plán je poradní. Neprovádí výzkum, stavbu, těžbu, přesun ani obchod. Pořadí je vysvětlitelná heuristika, nikoliv důkaz optimálního postupu.',
+      'Podklady se načítají postupně a nejsou atomické. Splnění znamená pozorovaný stav při načtení, ne trvalou záruku nebo historický počet vyrobených kusů.',
+      'Materiálový počet kusů, plánovaný výkon ks/min a tržní ocenění zůstávají odlišné. Podmíněné dodávky, kapacity a ceny neznamenají provedenou akci.']};
+}
+function createJourneyAdvisor({catalog,baseline=null,loadRules,readProgress,readFactory,readMarket,readExpansion,cancelWork=()=>{},onChange=()=>{},now=()=>new Date().toISOString()}){
+  const state={busy:false,stage:'idle',error:'',snapshot:null,compatibility:null,goal:'production',itemId:'iron-ingot',quantity:'10',projectId:'',rate:'10',includeAccount:true,withFactory:true,withMarket:false,withExpansion:false,stale:false};
+  let serial=0,previous=null,key=null,pinned=null;const emit=()=>onChange();
+  function invalidate(notify=true){const owned=state.busy?state.stage:null;serial++;state.busy=false;state.stage='idle';state.snapshot=null;state.error='';if(owned)cancelWork(owned);if(notify)emit()}
+  function reset(){previous=null;key=null;pinned=null;state.compatibility=null;invalidate()}
+  function cancel(){invalidate(false);state.error='Plánování zrušeno.';emit()}
+  function markStale(notify=true){state.stale=true;if(state.snapshot)state.snapshot.stale=true;if(notify)emit()}
+  function edit(k,v){if(state.busy||!['goal','itemId','quantity','projectId','rate','includeAccount','withFactory','withMarket','withExpansion'].includes(k))return;state[k]=v;state.snapshot=null;state.error=''}
+  async function check(){if(state.busy)return;state.busy=true;state.stage='compatibility';state.snapshot=null;const ticket=++serial;emit();try{const rules=await loadRules();if(ticket!==serial)return;state.compatibility=auditToolkitInterfaces(catalog,rules,now(),baseline)}catch(e){if(ticket===serial)state.compatibility={ok:false,at:now(),issues:[String(e.message||e)]}}finally{if(ticket===serial){state.busy=false;state.stage='idle';emit()}}}
+  async function refresh(stationId){
+    if(state.busy)return null;const ticket=++serial;state.busy=true;state.stage='validation';state.error='';state.snapshot=null;state.stale=false;emit();const current=()=>ticket===serial;
+    try{
+      const quantity=Number(state.quantity),rate=Number(state.rate);
+      if(typeof stationId!=='string'||!stationId||!['production','research'].includes(state.goal)||!Number.isSafeInteger(quantity)||quantity<1||quantity>1000000||!Number.isFinite(rate)||rate<0.001||rate>1000000||!catalog.items[state.itemId])throw Error('Vyber stanici a platný cíl, množství a výkon.');
+      const config={stationId,goal:state.goal,itemId:state.itemId,quantity,projectId:state.projectId.trim(),rate,includeAccount:!!state.includeAccount,withFactory:!!state.withFactory,withMarket:!!state.withMarket,withExpansion:!!state.withExpansion};
+      const nextKey=JSON.stringify([stationId,config.goal,config.goal==='production'?config.itemId:config.projectId,config.goal==='production'?quantity:null]);
+      if(nextKey!==key){previous=null;pinned=null;key=nextKey}
+      state.stage='compatibility';emit();const rules=await loadRules();if(!current())return null;state.compatibility=auditToolkitInterfaces(catalog,rules,now(),baseline);if(!state.compatibility.ok)throw Error('Herní rozhraní se liší od vložených dat. Plán nebyl sestaven; ověř diagnostiku kompatibility.');
+      state.stage='progress';emit();const progress=await readProgress(stationId,{...config,projectId:pinned||config.projectId});if(!current())return null;if(!progress)throw Error('Čerstvý materiálový a výzkumný podklad se nepodařilo načíst.');
+      if(config.goal==='research'){pinned=pinned||config.projectId||progress.target?.desired||progress.target?.id;config.projectId=pinned}
+      const basic=buildJourneyPlan({catalog,config,progress,at:now(),stale:state.stale}),failures=[];let factory=null,market=null,expansion=null;
+      const run=async(stage,fn)=>{state.stage=stage;emit();try{const value=await fn();if(!value)throw Error('Podklad nebyl ověřen.');return value}catch(e){if(current())failures.push({stage,reason:String(e.message||e)});return null}};
+      if(!basic.complete){
+        if(config.goal==='production'&&config.withFactory){factory=await run('factory',()=>readFactory(stationId,config));if(!current())return null}
+        if(config.goal==='production'&&config.withMarket){const missing=Math.max(0,quantity-(progress.materialPlan.usedStock?.[config.itemId]||0));if(missing)market=await run('market',()=>readMarket(stationId,{...config,quantity:missing}));if(!current())return null}
+        if(config.withExpansion&&Object.values(progress.materialPlan.rawMissing||{}).some(n=>n>0)){expansion=await run('expansion',()=>readExpansion(progress,config));if(!current())return null}
+      }
+      state.snapshot=buildJourneyPlan({catalog,config,progress,factory,market,expansion,failures,previous,at:now(),stale:state.stale});previous=state.snapshot;return state.snapshot;
+    }catch(e){if(current()){state.error=String(e.message||e);if(state.stage==='compatibility')state.compatibility={ok:false,at:now(),issues:[state.error]}}return null}
+    finally{if(current()){state.busy=false;state.stage='idle';emit()}}
+  }
+  return {state,refresh,check,edit,invalidate,reset,cancel,markStale};
+}
+  const JOURNEY_BASELINE = {"recipes":[{"id":"aluminum-frame","machine":"press","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"aluminum-ingot","machine":"furnace","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"aluminum-sheet","machine":"press","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"ammonia","machine":"chemical","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"asm-1","machine":"assembler","level":1,"seconds":30,"makes":1,"building":true,"research":null},{"id":"asm-2","machine":"assembler","level":1,"seconds":60,"makes":1,"building":true,"research":"tier-2-buildings"},{"id":"asm-3","machine":"assembler","level":2,"seconds":120,"makes":1,"building":true,"research":"tier-3-buildings"},{"id":"assembler-2","machine":"assembler","level":1,"seconds":60,"makes":1,"building":true,"research":"tier-2-buildings"},{"id":"assembler-3","machine":"assembler","level":2,"seconds":120,"makes":1,"building":true,"research":"tier-3-buildings"},{"id":"battery-cathode","machine":"chemical","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"boron-powder","machine":"chemical","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"borosilicate-glass","machine":"furnace","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"brass","machine":"furnace","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"breathable-air","machine":"cryo","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"bronze","machine":"furnace","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"catalyst-mesh","machine":"chemical","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"cobalt-ingot","machine":"furnace","level":1,"seconds":24,"makes":1,"building":null,"research":null},{"id":"control-rod","machine":"assembler","level":3,"seconds":48,"makes":1,"building":null,"research":null},{"id":"copper-ingot","machine":"furnace","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"copper-sheet","machine":"press","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"copper-tubing","machine":"press","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"copper-wire","machine":"press","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"cryo-1","machine":"assembler","level":1,"seconds":30,"makes":1,"building":true,"research":null},{"id":"cryo-2","machine":"assembler","level":1,"seconds":60,"makes":1,"building":true,"research":"tier-2-buildings"},{"id":"cryo-3","machine":"assembler","level":2,"seconds":120,"makes":1,"building":true,"research":"tier-3-buildings"},{"id":"deuterium","machine":"refinery","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"diamond","machine":"press","level":3,"seconds":4,"makes":1,"building":null,"research":null},{"id":"electric-motor","machine":"assembler","level":2,"seconds":48,"makes":1,"building":null,"research":null},{"id":"engine-nozzle","machine":"furnace","level":3,"seconds":24,"makes":1,"building":null,"research":null},{"id":"enriched-uranium","machine":"refinery","level":2,"seconds":60,"makes":1,"building":null,"research":null},{"id":"fertilizer","machine":"chemical","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"fission-fuel-rod","machine":"assembler","level":3,"seconds":120,"makes":1,"building":null,"research":null},{"id":"flare","machine":"assembler","level":1,"seconds":20,"makes":1,"building":null,"research":null},{"id":"fuel-cell","machine":"assembler","level":2,"seconds":120,"makes":1,"building":null,"research":null},{"id":"fur-1","machine":"assembler","level":1,"seconds":30,"makes":1,"building":true,"research":null},{"id":"fur-2","machine":"assembler","level":1,"seconds":60,"makes":1,"building":true,"research":"tier-2-buildings"},{"id":"fur-3","machine":"assembler","level":2,"seconds":120,"makes":1,"building":true,"research":"tier-3-buildings"},{"id":"fusion-fuel-pellet","machine":"refinery","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"galvanized-steel","machine":"chemical","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"glass","machine":"furnace","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"gold-contacts","machine":"chemical","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"gold-foil","machine":"press","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"gold-ingot","machine":"furnace","level":1,"seconds":24,"makes":1,"building":null,"research":null},{"id":"graphite","machine":"furnace","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"helium-tank","machine":"cryo","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"hydrogen-filter","machine":"press","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"hydrogen-gas","machine":"cryo","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"hydrogen-storage-cell","machine":"cryo","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"chem-1","machine":"assembler","level":1,"seconds":30,"makes":1,"building":true,"research":null},{"id":"chem-2","machine":"assembler","level":1,"seconds":60,"makes":1,"building":true,"research":"tier-2-buildings"},{"id":"chem-3","machine":"assembler","level":2,"seconds":120,"makes":1,"building":true,"research":"tier-3-buildings"},{"id":"chrome-plating","machine":"chemical","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"chromium-ingot","machine":"furnace","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"igniter","machine":"assembler","level":1,"seconds":20,"makes":1,"building":null,"research":null},{"id":"ion-thruster","machine":"assembler","level":3,"seconds":48,"makes":1,"building":null,"research":null},{"id":"iridium-crucible","machine":"furnace","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"iridium-ingot","machine":"furnace","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"iron-ingot","machine":"furnace","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"iron-plate","machine":"press","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"lead-acid-battery","machine":"assembler","level":1,"seconds":20,"makes":1,"building":null,"research":null},{"id":"lead-ingot","machine":"furnace","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"lead-shielding","machine":"furnace","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"liquid-helium","machine":"cryo","level":3,"seconds":24,"makes":1,"building":null,"research":null},{"id":"liquid-hydrogen","machine":"cryo","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"liquid-nitrogen","machine":"cryo","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"liquid-oxygen","machine":"cryo","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"lithium-battery","machine":"assembler","level":2,"seconds":48,"makes":1,"building":null,"research":null},{"id":"lithium-metal","machine":"furnace","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"magnesium-alloy","machine":"furnace","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"magnesium-ingot","machine":"furnace","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"miner-1","machine":"assembler","level":1,"seconds":30,"makes":1,"building":true,"research":null},{"id":"miner-2","machine":"assembler","level":1,"seconds":60,"makes":1,"building":true,"research":"tier-2-buildings"},{"id":"miner-3","machine":"assembler","level":2,"seconds":120,"makes":1,"building":true,"research":"tier-3-buildings"},{"id":"mining-charge","machine":"chemical","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"mirror","machine":"chemical","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"neodymium-magnet","machine":"furnace","level":3,"seconds":24,"makes":1,"building":null,"research":null},{"id":"neodymium-metal","machine":"furnace","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"neutron-detector","machine":"assembler","level":3,"seconds":120,"makes":1,"building":null,"research":null},{"id":"nickel-ingot","machine":"furnace","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"nickel-plating","machine":"chemical","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"nitrogen-gas","machine":"cryo","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"oxygen-gas","machine":"cryo","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"palladium-ingot","machine":"furnace","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"phosphorus-powder","machine":"press","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"platinum-ingot","machine":"furnace","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"polymer","machine":"chemical","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"prs-1","machine":"assembler","level":1,"seconds":30,"makes":1,"building":true,"research":null},{"id":"prs-2","machine":"assembler","level":1,"seconds":60,"makes":1,"building":true,"research":"tier-2-buildings"},{"id":"prs-3","machine":"assembler","level":2,"seconds":120,"makes":1,"building":true,"research":"tier-3-buildings"},{"id":"pure-silicon","machine":"furnace","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"ref-1","machine":"assembler","level":1,"seconds":30,"makes":1,"building":true,"research":null},{"id":"ref-2","machine":"assembler","level":1,"seconds":60,"makes":1,"building":true,"research":"tier-2-buildings"},{"id":"ref-3","machine":"assembler","level":2,"seconds":120,"makes":1,"building":true,"research":"tier-3-buildings"},{"id":"refined-carbon","machine":"furnace","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"rocket-fuel","machine":"cryo","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"rubber","machine":"chemical","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"silicon-wafer","machine":"refinery","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"silver-ingot","machine":"furnace","level":1,"seconds":24,"makes":1,"building":null,"research":null},{"id":"silver-paste","machine":"chemical","level":1,"seconds":24,"makes":1,"building":null,"research":null},{"id":"solder","machine":"furnace","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"stainless-steel","machine":"furnace","level":3,"seconds":10,"makes":1,"building":null,"research":null},{"id":"station-1","machine":"assembler","level":1,"seconds":30,"makes":1,"building":true,"research":null},{"id":"steel","machine":"furnace","level":2,"seconds":4,"makes":1,"building":null,"research":null},{"id":"sulfur-powder","machine":"press","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"sulfuric-acid","machine":"chemical","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"superalloy","machine":"furnace","level":3,"seconds":24,"makes":1,"building":null,"research":null},{"id":"thorium-fuel-rod","machine":"assembler","level":3,"seconds":120,"makes":1,"building":null,"research":null},{"id":"thorium-oxide","machine":"chemical","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"tin-ingot","machine":"furnace","level":1,"seconds":10,"makes":1,"building":null,"research":null},{"id":"titanium-alloy","machine":"furnace","level":3,"seconds":10,"makes":1,"building":null,"research":null},{"id":"titanium-ingot","machine":"furnace","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"titanium-plate","machine":"press","level":2,"seconds":10,"makes":1,"building":null,"research":null},{"id":"tungsten-carbide","machine":"furnace","level":3,"seconds":24,"makes":1,"building":null,"research":null},{"id":"tungsten-powder","machine":"furnace","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"uranium-233","machine":"refinery","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"uranium-oxide","machine":"chemical","level":3,"seconds":60,"makes":1,"building":null,"research":null},{"id":"water","machine":"chemical","level":1,"seconds":4,"makes":1,"building":null,"research":null},{"id":"xenon-lamp","machine":"assembler","level":2,"seconds":48,"makes":1,"building":null,"research":null},{"id":"xenon-tank","machine":"cryo","level":2,"seconds":24,"makes":1,"building":null,"research":null},{"id":"zinc-ingot","machine":"furnace","level":1,"seconds":10,"makes":1,"building":null,"research":null}],"buildings":[{"id":"assembler-1","kind":"assembler","tier":1,"speed":0.5,"stacks":null,"slots":null,"floor":true,"research":"assembly-bay","mines":null,"drain":null},{"id":"assembler-2","kind":"assembler","tier":2,"speed":0.5,"stacks":null,"slots":null,"floor":true,"research":null,"mines":null,"drain":null},{"id":"assembler-3","kind":"assembler","tier":3,"speed":0.5,"stacks":null,"slots":null,"floor":true,"research":null,"mines":null,"drain":null},{"id":"construct-1","kind":"construct","tier":0,"speed":0.5,"stacks":null,"slots":null,"floor":null,"research":null,"mines":null,"drain":null},{"id":"contracts-1","kind":"contracts","tier":0,"speed":null,"stacks":null,"slots":null,"floor":null,"research":null,"mines":null,"drain":null},{"id":"lab-1","kind":"lab","tier":0,"speed":0.5,"stacks":null,"slots":null,"floor":null,"research":null,"mines":null,"drain":null},{"id":"miner-1","kind":"miner","tier":1,"speed":0.5,"stacks":null,"slots":null,"floor":null,"research":null,"mines":1,"drain":1},{"id":"miner-2","kind":"miner","tier":2,"speed":0.625,"stacks":null,"slots":null,"floor":null,"research":null,"mines":2,"drain":0.6},{"id":"miner-3","kind":"miner","tier":3,"speed":0.75,"stacks":null,"slots":null,"floor":null,"research":null,"mines":3,"drain":0.4},{"id":"ops-1","kind":"ops","tier":0,"speed":null,"stacks":null,"slots":null,"floor":null,"research":"ship-bay","mines":null,"drain":null},{"id":"shipyard-1","kind":"shipyard","tier":0,"speed":0.5,"stacks":null,"slots":null,"floor":null,"research":"ship-bay","mines":null,"drain":null},{"id":"station-1","kind":"station","tier":1,"speed":null,"stacks":20,"slots":2,"floor":null,"research":null,"mines":null,"drain":null}],"machines":[{"id":"asm-1","kind":"assembler","tier":1,"speed":1,"productivity":null,"w":3,"d":4},{"id":"asm-2","kind":"assembler","tier":2,"speed":2,"productivity":null,"w":4,"d":5},{"id":"asm-3","kind":"assembler","tier":3,"speed":3,"productivity":0.5,"w":5,"d":5},{"id":"cryo-1","kind":"cryo","tier":1,"speed":1,"productivity":null,"w":3,"d":3},{"id":"cryo-2","kind":"cryo","tier":2,"speed":1.5,"productivity":0.25,"w":4,"d":4},{"id":"cryo-3","kind":"cryo","tier":3,"speed":3,"productivity":0.5,"w":5,"d":5},{"id":"fur-1","kind":"furnace","tier":1,"speed":1,"productivity":null,"w":3,"d":3},{"id":"fur-2","kind":"furnace","tier":2,"speed":1.5,"productivity":0.25,"w":4,"d":4},{"id":"fur-3","kind":"furnace","tier":3,"speed":3,"productivity":0.5,"w":5,"d":5},{"id":"chem-1","kind":"chemical","tier":1,"speed":1,"productivity":null,"w":3,"d":3},{"id":"chem-2","kind":"chemical","tier":2,"speed":2,"productivity":null,"w":4,"d":4},{"id":"chem-3","kind":"chemical","tier":3,"speed":3,"productivity":0.5,"w":5,"d":5},{"id":"prs-1","kind":"press","tier":1,"speed":1,"productivity":null,"w":3,"d":3},{"id":"prs-2","kind":"press","tier":2,"speed":2,"productivity":null,"w":4,"d":4},{"id":"prs-3","kind":"press","tier":3,"speed":3,"productivity":0.5,"w":5,"d":5},{"id":"ref-1","kind":"refinery","tier":1,"speed":1,"productivity":null,"w":3,"d":3},{"id":"ref-2","kind":"refinery","tier":2,"speed":1.5,"productivity":0.25,"w":4,"d":4},{"id":"ref-3","kind":"refinery","tier":3,"speed":3,"productivity":0.5,"w":5,"d":5}],"projects":[{"id":"assembler","scope":"global","steps":15,"seconds":3.75,"credits":null,"requires":["assembly-bay"]},{"id":"assembly-bay","scope":"global","steps":10,"seconds":2.5,"credits":null,"requires":[]},{"id":"auto-requests","scope":"global","steps":null,"seconds":null,"credits":500000,"requires":[]},{"id":"floor-20","scope":"global","steps":25,"seconds":3.75,"credits":null,"requires":["assembly-bay"]},{"id":"floor-250","scope":"global","steps":100,"seconds":36,"credits":null,"requires":["floor-75"]},{"id":"floor-75","scope":"global","steps":50,"seconds":10,"credits":null,"requires":["floor-20"]},{"id":"ship-bay","scope":"global","steps":20,"seconds":7.5,"credits":null,"requires":["station-slots"]},{"id":"station-slots","scope":"local","steps":40,"seconds":7.5,"credits":null,"requires":["assembly-bay"]},{"id":"tier-2-buildings","scope":"global","steps":null,"seconds":null,"credits":50000,"requires":[]},{"id":"tier-3-buildings","scope":"global","steps":null,"seconds":null,"credits":250000,"requires":["tier-2-buildings"]}],"tickMs":250,"marketLimits":{"price":100000000,"units":10000000,"orders":100}};
+  const STORE = 'aos-toolkit.v1';
+  const readStored=key=>{try{return localStorage.getItem(key)??null}catch{return null}};
+  const old=(()=>{try{return JSON.parse(readStored('aos-toolkit.v0.1')||'null')}catch{return null}})();
+  const currentPreferences=readStored(STORE);
+  const storageMigration=migrateToolkitStorage(currentPreferences??readStored('aos-toolkit.v0.2'),{source:currentPreferences===null?'legacy':'current',legacyPosition:old?.position});
+  const saved=storageMigration.data,SETTINGS={...TOOLKIT_DEFAULTS},settings={...saved.settings,enableWrites:false};
+  // Legacy keys are preserved for rollback; financial/account snapshots are never migrated.
+  if(currentPreferences===null&&storageMigration.canSave)try{localStorage.setItem(STORE,JSON.stringify(saved))}catch{}
   const state = {
     opened:false, tab:'summary', loaded:false, stations:[], stationId:'', view:null, meta:null,
     depositStatus:'unloaded', planets:[], depositNames:[], forecast:[], plan:[],
-    error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position||old?.position, windowSize:saved?.windowSize||null,
+    error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position, windowSize:saved?.windowSize||null,
     fabPosition:saved?.fabPosition||null, fabMover:null, exploredOpened:false, exploredTab:'list', exploredMinimized:!!saved?.exploredMinimized, scannerOriginMode:'station', scannerOriginId:'', scannerX:'', scannerY:'', exploredPosition:saved?.exploredPosition||null, exploredSize:saved?.exploredSize||null,
     audit:[], serverLog:[], querySerial:0, compact:false, writing:false
   };
@@ -1296,6 +1429,13 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
     loadRules:async()=>{const [production,bay,sim,buildings,research,construct]=await Promise.all([import('/src/production.js'),import('/src/bay.js'),import('/src/baysim.js'),import('/src/buildings.js'),import('/src/research.js'),import('/src/construct.js')]);return {...production,...bay,...sim,...buildings,...research,...construct}}});
   const marketAssistant=createMarketAssistant({catalog:GAME,api,planMaterials,onChange:()=>render(),
     loadRules:async()=>{const [market,production,buildings]=await Promise.all([import('/src/market-rules.js'),import('/src/production.js'),import('/src/buildings.js')]);return {...market,RECIPES:production.RECIPES,buildingById:buildings.buildingById,holdLimit:buildings.holdLimit}}});
+  const journeyAdvisor=createJourneyAdvisor({catalog:GAME,baseline:JOURNEY_BASELINE,onChange:()=>render(),
+    loadRules:async()=>{const [production,research,buildings,items,bay,sim,market]=await Promise.all([import('/src/production.js'),import('/src/research.js'),import('/src/buildings.js'),import('/src/items.js'),import('/src/bay.js'),import('/src/baysim.js'),import('/src/market-rules.js')]);return {...production,...research,...buildings,...items,...bay,...sim,...market}},
+    readProgress:async(id,c)=>{Object.assign(progressAdvisor.state,{goal:c.goal==='research'?'progress':'production',projectId:c.projectId,itemId:c.itemId,quantity:c.quantity,includeAccount:c.includeAccount});const p=await progressAdvisor.refresh(id,{system:state.view?.station?.system,resources:state.depositNames,verified:state.depositStatus==='ok'});if(!p)throw Error(progressAdvisor.state.error||'Chybí materiálový plán.');return p},
+    readFactory:async(id,c)=>{factoryPlanner.edit('itemId',c.itemId);factoryPlanner.edit('rate',String(c.rate));const p=await factoryPlanner.refresh(id);if(!p)throw Error(factoryPlanner.state.error||'Kapacity nebyly načteny.');return p},
+    readMarket:async(id,c)=>{marketAssistant.edit('itemId',c.itemId);marketAssistant.edit('quantity',String(c.quantity));const p=await marketAssistant.refresh(id);if(!p)throw Error(marketAssistant.state.error||'Trh nebyl načten.');return {stationId:id,snapshot:p}},
+    readExpansion:async(p)=>{const context=buildExpansionContext(p,GAME,expansionAdvisor.state.minerId);expansionAdvisor.state.goalMode='goal';await expansionAdvisor.search({originId:context.station.system,context});if(expansionAdvisor.state.error)throw Error(expansionAdvisor.state.error);return {context:expansionAdvisor.state.context,at:expansionAdvisor.state.at,rows:expansionAdvisor.state.rows}},
+    cancelWork:stage=>{if(stage==='progress'){progressAdvisor.invalidate();if(accountOverview.state.busy)accountOverview.cancel()}if(stage==='factory')factoryPlanner.cancel();if(stage==='market')marketAssistant.cancel();if(stage==='expansion')expansionAdvisor.cancel()}});
   let expansionPreparationSerial=0;
   function cancelExpansionWork(){
     expansionPreparationSerial++;const preparing=expansionAdvisor.state.preparing;expansionAdvisor.state.preparing=false;
@@ -1323,11 +1463,11 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
   const stack = id => GAME.items[id]?.s || null;
   const places = value => [value].flat().filter(Boolean);
   const maxStack = (view,id) => Math.round(num(GAME.buildings[view?.station?.building]?.s,20) * (stack(id)||0));
-  const save = () => { try { localStorage.setItem(STORE,JSON.stringify({settings:{...settings,enableWrites:false},position:state.position,windowSize:state.windowSize,fabPosition:state.fabPosition,exploredPosition:state.exploredPosition,exploredSize:state.exploredSize,exploredMinimized:state.exploredMinimized})) } catch {} };
+  const save=()=>{if(!storageMigration.canSave)return false;try{const clean=migrateToolkitStorage({schemaVersion:1,settings:{...settings,enableWrites:false},position:state.position,windowSize:state.windowSize,fabPosition:state.fabPosition,exploredPosition:state.exploredPosition,exploredSize:state.exploredSize,exploredMinimized:state.exploredMinimized});localStorage.setItem(STORE,JSON.stringify(clean.data));return true}catch{return false}};
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.10.0',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'1.0.0',at:new Date().toISOString(),station:state.stationId,
     requestsOn:state.view?.requestsOn,exportsOn:state.view?.exportsOn,groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -1360,6 +1500,7 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
   }
   async function loadView(own=true){
     if(state.writing || (own && state.processing))return;
+    journeyAdvisor.invalidate();
     marketAssistant.invalidate();
     factoryPlanner.invalidate();
     progressAdvisor.invalidate();
@@ -1572,6 +1713,8 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
     return Number(r.keeps?.stations??r.keep)===body.keep && equal(places(r.to),body.to) && r.excess===false;
   }
   async function applySelected(){
+    if(journeyAdvisor.state.busy){state.error='Nejprve dokonči nebo zruš načítání společného plánu.';render();return}
+    if(!storageMigration.canSave||journeyAdvisor.state.compatibility?.ok===false){state.error='Zápis blokuje neznámý formát nastavení nebo zjištěná změna herního rozhraní. Ověř diagnostiku kompatibility.';render();return}
     if(state.processing || state.writing || accountOverview.state.busy || progressAdvisor.state.busy)return;
     const changes=selectedChanges();if(!changes.length)return;
     if(!settings.enableWrites){state.error='Nejdřív zapni možnost Zápis do hry.';render();return}
@@ -1584,7 +1727,7 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
     const warning=proposalWarnings().length?'\n'+proposalWarnings().join('\n'):'';
     if(!confirm(`AOS Toolkit: ${changes.length} změn logistiky na ${stationName} (${stationId}).\n\nZáloha se stáhne jako JSON. Jde o SKUTEČNÉ změny na serveru.${warning}\n\nPokračovat?`))return;
     if(prompt('Pro potvrzení napiš přesně PROVEST:')!=='PROVEST'){state.notice='Zrušeno';render();return}
-    state.processing=true;state.writing=true;marketAssistant.invalidate();factoryPlanner.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.error='';state.serverLog=[];state.notice='Kontroluji aktuální konfiguraci…';render();
+    state.processing=true;state.writing=true;journeyAdvisor.invalidate();marketAssistant.invalidate();factoryPlanner.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.error='';state.serverLog=[];state.notice='Kontroluji aktuální konfiguraci…';render();
     try{
       const fresh=await api('/api/stations/view?id='+encodeURIComponent(stationId));validateView(fresh,stationId);
       if(configSignature(fresh)!==signature)throw Error('Konfigurace se od náhledu změnila. Obnov detail a zkontroluj nový návrh');
@@ -1617,7 +1760,8 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.10.0',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'1.0.0',at:new Date().toISOString(),reference:GAME.version,
+      compatibility:journeyAdvisor.state.compatibility,storage:{schema:1,canSave:storageMigration.canSave,warnings:storageMigration.warnings},
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -1798,6 +1942,38 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
     if(name==='calculate'){marketAssistant.calculate();return}
     if(name==='refresh'&&!factoryPlanner.state.busy&&!progressAdvisor.state.busy&&!accountOverview.state.busy)await marketAssistant.refresh(state.stationId);
   }
+  const journeyStage=id=>({validation:'kontrola cíle',compatibility:'kontrola definic',progress:'materiály a výzkum',factory:'výrobní kapacity',market:'tržní knihy',expansion:'kandidáti další základny',idle:'připraveno'}[id]||id);
+  function journeyMenu(){
+    const d=journeyAdvisor.state,s=d.snapshot,disabled=d.busy||state.processing||state.writing;
+    const statuses={done:'Ověřeno splnění',pending:'Zbývá',review:'Ověřit podmínky',blocked:'Blokováno',unknown:'Neověřeno',replanned:'Nahrazeno přepočtem'};
+    const products=Object.keys(GAME.recipes).sort((a,b)=>item(a).localeCompare(item(b))).map(id=>`<option value="${esc(id)}" ${d.itemId===id?'selected':''}>${esc(item(id))}</option>`).join('');
+    const phases=[['now','Teď · vstupy a dostupné možnosti'],['then','Potom · výzkum a výroba'],['base','Další základna']];
+    return wrap(`<b>Společný plán · teď → potom → další základna</b><p>Po obnovení se dokončení ověří z aktuálních zásob nebo stavu výzkumu. Nástroje nic neprovedou. Trh a hledání základny jsou volitelné a mohou načítat více podkladů.</p>
+      <label>Cíl <select data-journey-value="goal" ${disabled?'disabled':''}><option value="production" ${d.goal==='production'?'selected':''}>Konečné množství výrobku</option><option value="research" ${d.goal==='research'?'selected':''}>Konkrétní výzkum</option></select></label>
+      ${d.goal==='production'?`<label>Výrobek <select data-journey-value="itemId" ${disabled?'disabled':''}>${products}</select></label><label>Počet kusů <input data-journey-value="quantity" type="number" min="1" max="1000000" value="${esc(d.quantity)}" ${disabled?'disabled':''}></label><label>Samostatný výkon pro Factory Planner (ks/min) <input data-journey-value="rate" type="number" min="0.001" max="1000000" step="any" value="${esc(d.rate)}" ${disabled?'disabled':''}></label>`:`<label>ID výzkumu <input data-journey-value="projectId" maxlength="80" value="${esc(d.projectId)}" placeholder="první cíl se při načtení připne" ${disabled?'disabled':''}></label>`}
+      ${[['includeAccount','Zahrnout vlastní další stanice'],['withFactory','Načíst kapacity (výrobní cíl)'],['withMarket','Načíst trh pro chybějící výrobek'],['withExpansion','Hledat lokalitu pro zbytkové raw vstupy']].map(([key,label])=>`<label class="tick"><input type="checkbox" data-journey-value="${key}" ${d[key]?'checked':''} ${disabled?'disabled':''}> ${label}</label>`).join('')}
+      <button data-journey="refresh" ${disabled||!state.stationId?'disabled':''}>Obnovit a vyhodnotit splnění</button><button data-journey="cancel" ${d.busy?'':'disabled'}>Zrušit</button><button data-journey="check" ${disabled?'disabled':''}>Zkontrolovat definice</button><button data-journey="export" ${s&&!d.busy?'':'disabled'}>Export JSON</button>
+      <p id="journey-status" data-busy="${d.busy}" role="status" class="${d.error?'err':''}">${esc(d.error||(d.busy?'Načítám: '+journeyStage(d.stage):s?'Plán sestaven z načtených podkladů.':'Vyber stanici a cíl.'))}</p>`)+
+      (d.compatibility?wrap(`<b>Kontrola kompatibility</b><p>${d.compatibility.ok?'Kontrolované definice souhlasí.':'ZJIŠTĚNÁ ZMĚNA — nový společný plán a logistické zápisy jsou zablokované.'} · ${esc(d.compatibility.at)}</p>${d.compatibility.issues.slice(0,20).map(i=>`<p class="warning">${esc(i)}</p>`).join('')}<p>Kontrola porovnává recepty, stacky, budovy, rychlosti, produktivitu, výzkumné návaznosti, tick a tržní limity s referencemi vydání. Nepotvrzuje všechny serverové endpointy; jejich formát kontrolují jednotlivé moduly.</p>`):'')+
+      (s?`<section id="journey-results">${wrap(`<b>${esc(s.goal.name)} · ${s.complete?'SPLNĚNO VE SNÍMKU':'probíhá'}</b><p>${esc(s.station.name)} · ${esc(s.at)}.</p><p id="journey-stale" class="warning" ${s.stale?'':'hidden'}>Hra oznámila změnu podkladů. Obnov plán; předchozí splnění není potvrzení aktuálního stavu.</p><p>Nově splněných kroků: ${s.steps.filter(t=>t.newlyCompleted).length}. Kroků s nižší aktuální zásobou/stavem: ${s.steps.filter(t=>t.regressed).length}.</p><p>Vlastní dodávky zobrazené ${s.transferCoverage.shown}/${s.transferCoverage.total}; celý podklad je v materiálovém plánu Poradce.</p>${s.failures.map(f=>`<p class="warning">${esc(journeyStage(f.stage))}: ${esc(f.reason)}</p>`).join('')}`)}
+      ${phases.map(([phase,label])=>wrap(`<b>${label}</b>${s.steps.filter(t=>t.phase===phase).map(t=>`<div class="sect"><b>${esc(statuses[t.status])} · ${esc(t.title)}${t.newlyCompleted?' · nově splněno':''}${t.regressed?' · stav se zhoršil':''}</b><p>${esc(t.detail)}</p><button data-journey-open="${esc(t.action)}" data-journey-step="${esc(t.id)}">Otevřít související nástroj</button></div>`).join('')}${phase==='base'?s.candidates.map(c=>`<p><button data-journey-system="${esc(c.id)}">${esc(c.name)}</button> · pokrytí ${(c.coverage*100).toLocaleString('cs-CZ',{maximumFractionDigits:1})} % · ${fmt(c.distance)} ly</p>`).join(''):''}`)).join('')}
+      ${wrap(`<b>Časy podkladů</b>${Object.entries(s.sources).map(([k,v])=>`<p>${esc(k)}: ${esc(v||'nenačteno')}</p>`).join('')}${s.warnings.map(w=>`<p class="warning">${esc(w)}</p>`).join('')}`)}</section>`:'');
+  }
+  function journeyOpen(name,stepId){
+    if(journeyAdvisor.state.busy)return;
+    const s=journeyAdvisor.state.snapshot,step=s?.steps.find(t=>t.id===stepId);
+    if(name==='factory'){const target=step?.resource||s?.goal.id;if(GAME.recipes[target]&&factoryPlanner.state.itemId!==target)factoryPlanner.edit('itemId',target);state.tab='factory'}
+    else if(name==='market'){const target=step?.resource||s?.goal.id;if(GAME.items[target]&&marketAssistant.state.itemId!==target){marketAssistant.edit('itemId',target);if(step?.amount)marketAssistant.edit('quantity',String(step.amount))}state.tab='market'}
+    else if(name==='expansion'||name==='mining'){state.exploredOpened=true;state.exploredMinimized=false;state.exploredTab=name==='mining'?'mining':'expansion';if(name==='mining'&&s?.station.system)miningOptimizer.state.input=s.station.system;renderExplored();return}
+    else state.tab=name==='account'?'account':'advisor';render();
+  }
+  async function journeyAction(name){
+    const d=journeyAdvisor.state;if(name==='cancel'){journeyAdvisor.cancel();return}
+    if(d.busy||state.processing||state.writing)return;
+    if(name==='export'){if(d.snapshot)download(d.snapshot,'aos-toolkit-journey.json');return}
+    if(factoryPlanner.state.busy||marketAssistant.state.busy||progressAdvisor.state.busy||accountOverview.state.busy||expansionAdvisor.state.busy||expansionAdvisor.state.preparing)return;
+    if(name==='check')await journeyAdvisor.check();if(name==='refresh')await journeyAdvisor.refresh(state.stationId);
+  }
   function debugMenu(){
     const d=debugTools.state,s=d.snapshot,planet=s?.planets.find(p=>p.letter===d.letter);
     const disabled=d.busy?'disabled':'';
@@ -1968,15 +2144,15 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
     if(['loadMining','miningStation','miningMap'].includes(name)){if(!state.writing)await miningOptimizer.refresh(name==='miningStation'?state.view?.station?.system:name==='miningMap'?debugTools.currentSystemId():miningOptimizer.state.input);return}
     if(name==='cancelMining'){miningOptimizer.cancel();return}
     if(name==='recalculateMining'){miningOptimizer.recalculate();return}
-    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'0.10.0',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
+    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'1.0.0',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
     if(name==='scan'){if(!state.writing)await galaxyScanner.search({center:scannerCenter()});return}
     if(name==='cancelScan'){galaxyScanner.cancel();return}
     if(name==='scanPrev'||name==='scanNext'){galaxyScanner.state.page+=name==='scanPrev'?-1:1;renderExplored();return}
-    if(name==='exportScan'){download({version:'0.10.0',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
+    if(name==='exportScan'){download({version:'1.0.0',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
     if(['tabList','tabExpansion','tabScanner','tabMining'].includes(name)){state.exploredTab=name==='tabList'?'list':name==='tabScanner'?'scanner':name==='tabMining'?'mining':'expansion';renderExplored();return}
     if(name==='searchExpansion'){if(expansionAdvisor.state.goalMode==='goal'){await searchGoalExpansion();return}if(!state.writing)await expansionAdvisor.search({originId:state.view?.station?.system||debugTools.currentSystemId()});return}
     if(name==='cancelExpansion'){cancelExpansionWork();renderExplored();return}
-    if(name==='exportExpansion'){download({version:'0.10.0',at:expansionAdvisor.state.at,context:expansionAdvisor.state.context,origin:expansionAdvisor.state.origin,limits:{candidates:expansionAdvisor.state.limited,sites:expansionAdvisor.state.siteLimited},excluded:expansionAdvisor.state.excluded,rows:expansionAdvisor.state.rows},'aos-toolkit-expansion.json');return}
+    if(name==='exportExpansion'){download({version:'1.0.0',at:expansionAdvisor.state.at,context:expansionAdvisor.state.context,origin:expansionAdvisor.state.origin,limits:{candidates:expansionAdvisor.state.limited,sites:expansionAdvisor.state.siteLimited},excluded:expansionAdvisor.state.excluded,rows:expansionAdvisor.state.rows},'aos-toolkit-expansion.json');return}
     if(name==='close'){state.exploredOpened=false;miningOptimizer.cancel();galaxyScanner.cancel();cancelExpansionWork();exploredSystems.cancel();renderExplored();return}
     if(name==='cancel'){exploredSystems.cancel();return}
     if(name==='refresh'){if(!state.writing){invalidateExpansionWork();await exploredSystems.refresh();}return}
@@ -1984,29 +2160,32 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
     if(name==='prev')exploredSystems.state.page--;if(name==='next')exploredSystems.state.page++;renderExplored();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.10.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 1.0.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
-      <button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
+      <button data-journey="check">Zkontrolovat herní rozhraní</button><p>${esc(storageMigration.warnings.join(" "))}</p><p>Kompatibilita: ${esc(journeyAdvisor.state.compatibility?.ok===true?"kontrolované definice souhlasí":journeyAdvisor.state.compatibility?.ok===false?"zjištěná změna — viz Společný plán":"dosud neověřena")}</p><button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
   }
   function render(){
     if(!state.root)return;
-    if(state.opened&&state.tab==='market'&&marketAssistant.state.busy&&state.root.getElementById('panel')?.querySelector('#market-status')?.dataset.busy==='true'){
+    if(state.opened&&state.root.getElementById('panel')?.hidden!==true&&state.tab==='journey'&&journeyAdvisor.state.busy&&state.root.getElementById('panel')?.querySelector('#journey-status')?.dataset.busy==='true'){
+      state.root.getElementById('panel').querySelector('#journey-status').textContent='Načítám: '+journeyStage(journeyAdvisor.state.stage);return;
+    }
+    if(state.opened&&state.root.getElementById('panel')?.hidden!==true&&state.tab==='market'&&marketAssistant.state.busy&&state.root.getElementById('panel')?.querySelector('#market-status')?.dataset.busy==='true'){
       state.root.getElementById('panel').querySelector('#market-status').textContent=`Načítám knihy ${marketAssistant.state.progress}/${marketAssistant.state.total}…`;return;
     }
     // Keep busy controls alive between pointerdown and cancellation clicks.
-    if(state.opened&&state.tab==='factory'&&factoryPlanner.state.busy&&state.root.getElementById('panel')?.querySelector('#factory-status')?.dataset.busy==='true'){
+    if(state.opened&&state.root.getElementById('panel')?.hidden!==true&&state.tab==='factory'&&factoryPlanner.state.busy&&state.root.getElementById('panel')?.querySelector('#factory-status')?.dataset.busy==='true'){
       const status=state.root.getElementById('panel').querySelector('#factory-status');status.textContent=`Načítám vlastní stanici a haly ${factoryPlanner.state.progress}/${factoryPlanner.state.total}…`;return;
     }
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
-    const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['factory','Factory Planner'],['market','Trh'],['debug','Debug'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.10.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+    const tabs=[['summary','Přehled'],['journey','Společný plán'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['factory','Factory Planner'],['market','Trh'],['debug','Debug'],['diag','Diagnostika']];
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v1.0.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><button data-act="exploredOpen" title="Samostatné okno prozkoumaných systémů">Systémy</button><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
      <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
-     <main>${({summary,resources,galaxy,production,proposals,account:accountMenu,advisor:advisorMenu,factory:factoryMenu,market:marketMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
+     <main>${({summary,journey:journeyMenu,resources,galaxy,production,proposals,account:accountMenu,advisor:advisorMenu,factory:factoryMenu,market:marketMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
      <footer>All Out of Space · ${state.processing?'Probíhá operace':'Připraveno'} <button data-act="exportPlan">Export návrhů</button></footer>`;
     panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;invalidateExpansionWork();galaxyScanner.invalidate();miningOptimizer.invalidate();state.view=null;state.plan=[];state.selected.clear();loadView()});
     panel.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;render()}));
@@ -2027,6 +2206,14 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
     panel.querySelector('#enableWrites')?.addEventListener('change',e=>{if(state.processing)return;settings.enableWrites=e.target.checked;save();render()});
     panel.querySelector('#debug-system')?.addEventListener('input',e=>{debugTools.state.input=e.target.value});
     panel.querySelector('#debug-planet')?.addEventListener('change',e=>{debugTools.state.letter=e.target.value;render()});
+    panel.querySelectorAll('[data-journey]').forEach(b=>b.addEventListener('click',()=>journeyAction(b.dataset.journey)));
+    panel.querySelectorAll('[data-journey-open]').forEach(b=>b.addEventListener('click',()=>journeyOpen(b.dataset.journeyOpen,b.dataset.journeyStep)));
+    panel.querySelectorAll('[data-journey-system]').forEach(b=>b.addEventListener('click',()=>{try{const c=journeyAdvisor.state.snapshot?.candidates.find(c=>c.id===b.dataset.journeySystem);debugTools.cameraToKnownSystem(c?.system,{leaveStation:true})}catch(e){state.error=String(e.message||e);render()}}));
+    panel.querySelectorAll('[data-journey-value]').forEach(input=>input.addEventListener(input.tagName==='SELECT'||input.type==='checkbox'?'change':'input',()=>{
+      journeyAdvisor.edit(input.dataset.journeyValue,input.type==='checkbox'?input.checked:input.value);
+      if(input.dataset.journeyValue==='goal'){render();return}
+      panel.querySelector('#journey-results')?.setAttribute('hidden','');const status=panel.querySelector('#journey-status');if(status)status.textContent='Cíl změněn; obnov společný plán.';const exp=panel.querySelector('[data-journey="export"]');if(exp)exp.disabled=true;
+    }));
     panel.querySelectorAll('[data-market]').forEach(b=>b.addEventListener('click',()=>marketAction(b.dataset.market)));
     panel.querySelectorAll('[data-market-value]').forEach(input=>input.addEventListener(input.tagName==='SELECT'?'change':'input',()=>{
       marketAssistant.edit(input.dataset.marketValue,input.value);panel.querySelector('#market-results')?.setAttribute('hidden','');
@@ -2076,7 +2263,7 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
     if(name==='addRequest'||name==='addExport'){addDraft(name==='addRequest'?'request':'export',state.root?.getElementById('panel')?.querySelector('#draft-item')?.value);render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.10.0',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'1.0.0',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,priority:p.priority,group:p.existing?.group??p.group,risk:p.risk,error:p.error}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -2105,7 +2292,7 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
       main{flex:1;overflow:auto;min-height:120px;padding:11px;overscroll-behavior:contain}.sect{border-bottom:1px solid #294250;padding:6px 0 12px;margin-bottom:8px}.sect>b{display:block;font-size:13px}.sect p{color:#b6cad5;margin:7px 0}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#1b3340;border:1px solid #365666;padding:9px 5px;border-radius:6px;text-align:center}.metric strong{display:block;font-size:21px}.metric small{font-size:10px;color:#b8d3d7}
       .table{overflow:auto;margin:8px 0}.table table{border-collapse:collapse;min-width:440px;width:100%;font-size:11px}.table th,.table td{padding:7px;text-align:left;border-bottom:1px solid #34505c;vertical-align:top}.table th{background:#1e3543;color:#b5e6ed}
       .plan{display:flex;align-items:flex-start;gap:9px;padding:8px 6px;border:1px solid #314f5f;border-radius:7px;margin-top:5px}.plan.same{opacity:.8}.draft-fields{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.draft-fields label{display:grid;gap:3px}.draft-fields input{width:130px}.draft-fields input,.draft-fields select,#draft-item{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:5px;padding:5px;max-width:100%}.info{min-width:0}.plan input{margin-top:3px}.info{flex:1}.info strong{color:#e7f9ff}.info small{display:block;color:#a9c7d2}.info b{color:#fff}.caution{color:#ffcc7b!important}.tick{display:flex;gap:8px;align-items:center;margin:8px 0}.warning{padding:9px;background:#4b3b20;border-radius:7px;color:#ffde9b}.dangerbtn{background:#762b30!important;border-color:#c85656!important}pre{overflow:auto;background:#162f3b;padding:9px}footer{display:flex;justify-content:space-between;align-items:center;font-size:10px;padding:8px 12px;background:#1a303e;color:#b4c8d3}
-      #debug-system,#debug-planet,[id^="advisor-"],#account-filter,[data-factory-value],[data-market-value]{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
+      #debug-system,#debug-planet,[id^="advisor-"],#account-filter,[data-factory-value],[data-market-value],[data-journey-value]{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
       #explored-window{pointer-events:auto;position:fixed;z-index:2;left:25px;top:100px;width:min(800px,calc(100vw - 16px));height:480px;min-width:min(320px,calc(100vw - 16px));min-height:min(260px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);resize:both;overflow:hidden;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #527d8f;border-radius:12px;font:12px/1.45 system-ui;box-shadow:0 15px 45px #000b}
       #explored-window[hidden]{display:none}#explored-window header button{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif}#explored-window .explored-body{flex:1;min-height:80px;overflow:auto;padding:10px}#explored-window .explored-tools{display:flex;flex-wrap:wrap;gap:6px;padding:8px}#explored-window label{display:flex;align-items:center;gap:5px}#explored-window input,#explored-window select{max-width:220px;background:#182e3b;color:#fff;border:1px solid #587080;padding:5px;border-radius:5px}#explored-window button[data-explored],#explored-window .system-link{background:#21586a;color:#e4faff;border:1px solid #3b91a0;border-radius:5px;padding:5px 7px}#explored-window .system-link{text-align:left;text-decoration:underline;background:transparent;border:0;color:#8bdcef;padding:0}#explored-window td small{display:block;color:#afc6d1}#explored-window .tabs button[data-explored]{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:#b5c8d5}#explored-window .tabs button.active{color:#fff;border-bottom-color:#61c2d7}#explored-window button[data-explored-sort]{background:transparent;border:0;color:#b5e6ed;font-weight:bold;padding:0}#explored-window .sect small{display:block;color:#a9c7d2;margin:5px 0}#explored-window header{flex-shrink:0}#explored-window footer{gap:5px}
       #explored-window.minimized{height:auto!important;min-height:0;max-height:none;resize:none}#explored-window.minimized>:not(header){display:none!important}#explored-window header>div:first-child{min-width:0;overflow:hidden}#explored-window header b,#explored-window header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#explored-window .window-controls{display:flex;gap:5px;flex-shrink:0}.scanner-controls{max-height:45%;overflow:auto;flex-shrink:0}.scanner-resources{display:flex;flex-wrap:wrap;gap:6px;padding:8px;max-height:135px;overflow:auto;flex-shrink:0}.scanner-resources label{min-width:140px;font-size:11px}#explored-window [data-scanner-value]{max-width:190px}#explored-window input[type="number"]{width:110px}
@@ -2139,9 +2326,11 @@ function createMarketAssistant({catalog,api,loadRules,planMaterials,onChange=()=
   }
   document.addEventListener('spacefactory:auth',e=>{
     if(e.detail?.profile)return;
-    state.exploredOpened=false;marketAssistant.invalidate();factoryPlanner.invalidate();miningOptimizer.invalidate();galaxyScanner.invalidate();invalidateExpansionWork();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
+    state.exploredOpened=false;journeyAdvisor.reset();marketAssistant.invalidate();factoryPlanner.invalidate();miningOptimizer.invalidate();galaxyScanner.invalidate();invalidateExpansionWork();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
   });
-  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{marketAssistant.invalidate();factoryPlanner.invalidate();exploredSystems.stale();invalidateExpansionWork();galaxyScanner.invalidate();miningOptimizer.invalidate()});
-  for(const event of ['spacefactory:market','spacefactory:wallet'])document.addEventListener(event,()=>marketAssistant.invalidate());
+  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{journeyAdvisor.invalidate();marketAssistant.invalidate();factoryPlanner.invalidate();exploredSystems.stale();invalidateExpansionWork();galaxyScanner.invalidate();miningOptimizer.invalidate()});
+  function markJourneyStale(){journeyAdvisor.markStale(false);const el=state.root?.getElementById('panel')?.querySelector('#journey-stale');if(el)el.hidden=false}
+  for(const event of ['spacefactory:market','spacefactory:wallet'])document.addEventListener(event,()=>{markJourneyStale();marketAssistant.invalidate(false);if(state.tab==='market')render()});
+  for(const event of ['spacefactory:logistics','spacefactory:research'])document.addEventListener(event,()=>markJourneyStale());
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 })();
