@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.5.2
+// @version      0.5.3
 // @description  Account overview, network-aware progression advisor, Smart Logistics and client Debug tools (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
@@ -496,9 +496,34 @@ function logisticsPayload(p, {catalog, view, stationId, deposits=[], priority=50
   if(!Number.isInteger(rank)||rank<0||rank>100)throw Error('Priorita musí být celé číslo 0–100');
   return {...basic,amount:p.target,from:[...from],...(from.includes('stations')?{priority:rank}:{})};
 }
+// Shared validation for server-visible system structures; unknown never proves empty.
+function summarizeSystemStructures(list,systemId,lookup){
+  if(!Array.isArray(list))throw Error('Neznámý seznam staveb');
+  const seen=new Set();let stations=0,miners=0,unknown=0,ownStations=0,foreignStations=0,unknownOwnerStations=0,stationTier=0,minerTier=0,stationTierUnknown=false,minerTierUnknown=false;
+  for(const s of list){
+    if(!s||typeof s.id!=='string'||seen.has(s.id)||typeof s.building!=='string'||(s.system!==undefined&&s.system!==systemId))throw Error('Neplatná nebo duplicitní stavba');
+    seen.add(s.id);const spec=lookup(s.building);if(!spec){unknown++;continue}
+    const kind=spec.kind??spec.k,tier=spec.tier??spec.t;
+    if(!kind){unknown++;continue}
+    if(kind==='station'){
+      stations++;if(s.mine===true)ownStations++;else if(s.mine===false)foreignStations++;else unknownOwnerStations++;
+      if(Number.isInteger(tier)&&tier>0)stationTier=Math.max(stationTier,tier);else stationTierUnknown=true;
+    }
+    if(kind==='miner'){miners++;if(Number.isInteger(tier)&&tier>0)minerTier=Math.max(minerTier,tier);else minerTierUnknown=true}
+  }
+  return {stations,miners,unknown,ownStations,foreignStations,unknownOwnerStations,stationTier:stationTierUnknown||unknown?null:stationTier,minerTier:minerTierUnknown||unknown?null:minerTier,upgradeTier:stationTierUnknown||minerTierUnknown||unknown?null:Math.max(stationTier,minerTier)};
+}
+function compareExploredRows(a,b,key='name',direction='asc'){
+  const name=()=>String(a.name).localeCompare(String(b.name))||a.id.localeCompare(b.id);
+  if(key==='name')return (direction==='desc'?-1:1)*name();
+  const field={stations:'stations',miners:'miners',upgrade:'upgradeTier'}[key];if(!field)return name();
+  const value=row=>row.error||row.unknown||!Number.isFinite(row[field])?null:row[field];
+  const av=value(a),bv=value(b);if(av===null||bv===null)return av===bv?name():av===null?1:-1;
+  return (av-bv)*(direction==='desc'?-1:1)||name();
+}
 // Server-confirmed scouting list; structures are read in bounded GET batches.
-function createExploredSystems({api,catalog,loadMap,systemLabel=(id,system)=>system.name,onChange=()=>{},delay=ms=>new Promise(resolve=>setTimeout(resolve,ms)),now=()=>new Date().toISOString()}){
-  const state={busy:false,error:'',rows:[],total:0,progress:0,at:null,complete:false,query:'',filter:'all',page:0,notice:'Načti serverový seznam prozkoumaných systémů.'};
+function createExploredSystems({api,catalog,loadMap,buildingSpec=id=>catalog.buildings[id],systemLabel=(id,system)=>system.name,onChange=()=>{},delay=ms=>new Promise(resolve=>setTimeout(resolve,ms)),now=()=>new Date().toISOString()}){
+  const state={busy:false,error:'',rows:[],total:0,progress:0,at:null,complete:false,query:'',filter:'all',sort:'name',direction:'asc',page:0,notice:'Načti serverový seznam prozkoumaných systémů.'};
   let serial=0,revision=0;
   const emit=()=>onChange();
   function invalidate(){serial++;state.busy=false;state.rows=[];state.total=state.progress=0;state.at=null;state.complete=false;state.error='';state.query='';state.filter='all';state.page=0;state.notice='Seznam zneplatněn; načti jej znovu.';emit()}
@@ -533,14 +558,7 @@ function createExploredSystems({api,catalog,loadMap,systemLabel=(id,system)=>sys
           for(const row of rows){
             try{
               const list=Object.prototype.hasOwnProperty.call(systems,row.id)?systems[row.id]:[];
-              if(!Array.isArray(list))throw Error('Neznámý seznam staveb');
-              const seen=new Set();let stations=0,miners=0,unknown=0;
-              for(const s of list){
-                if(!s||typeof s.id!=='string'||seen.has(s.id)||typeof s.building!=='string'||(s.system!==undefined&&s.system!==row.id))throw Error('Neplatná nebo duplicitní stavba');
-                seen.add(s.id);const spec=catalog.buildings[s.building];if(!spec){unknown++;continue}
-                if(spec.k==='station')stations++;if(spec.k==='miner')miners++;
-              }
-              Object.assign(row,{stations,miners,unknown,checkedAt:now()});
+              Object.assign(row,summarizeSystemStructures(list,row.id,buildingSpec),{checkedAt:now()});
             }catch(e){row.error=String(e.message||e)}
           }
         }catch(e){if(ticket!==serial)return;for(const row of rows)row.error=String(e.message||e)}
@@ -554,7 +572,7 @@ function createExploredSystems({api,catalog,loadMap,systemLabel=(id,system)=>sys
     finally{if(ticket===serial){state.busy=false;emit()}}
   }
   function filtered(){const query=state.query.trim().toLocaleLowerCase('cs-CZ');return state.rows.filter(row=>(row.name+' '+row.id).toLocaleLowerCase('cs-CZ').includes(query)&&(state.filter==='all'||state.filter==='stations'&&row.stations>0||state.filter==='miners'&&row.miners>0||state.filter==='empty'&&row.stations===0&&row.miners===0&&!row.unknown&&!row.error))}
-  function page(){const rows=filtered(),pages=Math.max(1,Math.ceil(rows.length/100));state.page=Math.max(0,Math.min(state.page,pages-1));return {rows:rows.slice(state.page*100,state.page*100+100),total:rows.length,pages,index:state.page}}
+  function page(){const rows=filtered().sort((a,b)=>compareExploredRows(a,b,state.sort,state.direction)),pages=Math.max(1,Math.ceil(rows.length/100));state.page=Math.max(0,Math.min(state.page,pages-1));return {rows:rows.slice(state.page*100,state.page*100+100),total:rows.length,pages,index:state.page}}
   return {state,refresh,cancel,invalidate,stale,page};
 }
 // Pointer dragging stays outside render() so a drag keeps its pointer capture.
@@ -585,6 +603,87 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
   restore();
   return {restore,reset(){setPosition(null);Object.assign(button.style,{left:'auto',top:'auto',right:'18px',bottom:'22px'});save()}};
 }
+// Bounded nearby suggestions. Every displayed candidate passes a fresh server structure check.
+function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,systemLabel=(id,s)=>s.name,onChange=()=>{},delay=ms=>new Promise(resolve=>setTimeout(resolve,ms)),now=()=>new Date().toISOString()}){
+  const state={busy:false,error:'',notice:'Vyber výchozí systém a spusť hledání.',rows:[],origin:null,radius:500,wanted:'',at:null,phase:'idle',progress:0,total:0,nearby:0,limited:false,excluded:{mined:0,occupied:0,unknown:0,unsuitable:0}};let serial=0;
+  const emit=()=>onChange();
+  function invalidate(){serial++;Object.assign(state,{busy:false,rows:[],origin:null,at:null,error:'',phase:'idle',notice:'Podklady se změnily; spusť nové hledání.'});emit()}
+  function cancel(){if(!state.busy)return;serial++;state.busy=false;state.rows=[];state.at=null;state.phase='canceled';state.notice='Hledání zrušeno; návrhy nebyly dokončené.';emit()}
+  function deposits(world,seed,system){
+    const generated=world.generateSystem(seed,system);if(!Array.isArray(generated?.bodies))throw Error('Neznámý generátor planet');
+    const ids=new Set();let richness=0,n=0;
+    for(const body of generated.bodies.filter(b=>b?.letter)){
+      if(!Array.isArray(body.deposits))throw Error('Neznámá ložiska planety');
+      for(const id of body.deposits){if(catalog.items[id]?.c!=='raw')throw Error('Neznámá surovina');ids.add(id)}
+      const value=world.richnessOf(body);if(!Number.isFinite(value)||value<0)throw Error('Neplatná bohatost');richness+=value;n++;
+    }
+    return {resources:[...ids].sort(),richness:n?richness/n:0};
+  }
+  async function search({originId,radius=state.radius,wanted=state.wanted}={}){
+    if(state.busy)return;
+    const ticket=++serial;Object.assign(state,{busy:true,error:'',rows:[],origin:null,at:null,phase:'loading',notice:'Načítám čerstvé podklady…',progress:0,total:0,nearby:0,limited:false,excluded:{mined:0,occupied:0,unknown:0,unsuitable:0}});emit();
+    try{
+      radius=Number(radius);if(!Number.isInteger(radius)||radius<50||radius>1000)throw Error('Poloměr musí být celé číslo 50–1000 ly');
+      if(!/^-?\d{1,10}\.-?\d{1,10}\.\d{1,3}$/.test(String(originId??'')))throw Error('Nejprve načti stanici nebo otevři systém na mapě');
+      if(wanted&&catalog.items[wanted]?.c!=='raw')throw Error('Vyber známou těženou surovinu');state.radius=radius;state.wanted=wanted;
+      const units=await api('/api/units');if(ticket!==serial)return;
+      if(!Array.isArray(units.scouted)||units.scouted.some(id=>typeof id!=='string'||!/^[-]?\d{1,10}\.[-]?\d{1,10}\.\d{1,3}$/.test(id)))throw Error('Neznámý seznam průzkumu');
+      const scouted=new Set(units.scouted),meta=await api('/api/map/meta');if(ticket!==serial)return;
+      if(!['number','string'].includes(typeof meta.seed)||String(meta.seed).trim()===''||!Number.isSafeInteger(Number(meta.seed)))throw Error('Chybí platný seed');const seed=Number(meta.seed);
+      const {map,world}=await loadRules();if(ticket!==serial)return;
+      const origin=map.systemById(seed,originId);if(!origin||origin.id!==originId||!Number.isFinite(origin.x)||!Number.isFinite(origin.y))throw Error('Výchozí systém nelze ověřit');
+      state.origin={id:origin.id,name:systemLabel(origin.id,origin),x:origin.x,y:origin.y};
+      const baseline=deposits(world,seed,origin),range=map.sectorRange(origin.x-radius,origin.y-radius,origin.x+radius,origin.y+radius);
+      if(!range||![range.sx0,range.sx1,range.sy0,range.sy1].every(Number.isInteger)||range.sx1<range.sx0||range.sy1<range.sy0||(range.sx1-range.sx0+1)*(range.sy1-range.sy0+1)>225)throw Error('Rozsah hledání překročil limit 225 sektorů');
+      state.phase='map';state.notice='Hledám okolní systémy…';emit();const nearby=new Map();let sectors=0;
+      for(let sy=range.sy0;sy<=range.sy1;sy++)for(let sx=range.sx0;sx<=range.sx1;sx++){
+        const systems=map.sectorSystems(seed,sx,sy);if(!Array.isArray(systems)||systems.length>64)throw Error('Neznámý formát sektoru');
+        for(const system of systems){
+          if(!system||typeof system.id!=='string'||!/^[-]?\d{1,10}\.[-]?\d{1,10}\.\d{1,3}$/.test(system.id)||!Number.isFinite(system.x)||!Number.isFinite(system.y))throw Error('Neplatná data systému');
+          const distance=Math.hypot(system.x-origin.x,system.y-origin.y);
+          if(system.id!==originId&&distance<=radius)nearby.set(system.id,{id:system.id,name:systemLabel(system.id,system)||system.name,system,distance,scouted:scouted.has(system.id)});
+        }
+        if(++sectors%4===0){await delay(0);if(ticket!==serial)return}
+      }
+      state.nearby=nearby.size;const ordered=[...nearby.values()].sort((a,b)=>a.distance-b.distance||a.id.localeCompare(b.id));
+      const chosen=[...ordered.filter(r=>!r.scouted).slice(0,90),...ordered.filter(r=>r.scouted).slice(0,30)],chosenIds=new Set(chosen.map(r=>r.id));
+      const candidates=[...chosen,...ordered.filter(r=>!chosenIds.has(r.id))].slice(0,120);state.total=candidates.length;state.limited=nearby.size>120;
+      state.phase='structures';state.notice='Ověřuji, že kandidáti nemají minery…';emit();const checked=[];
+      for(let i=0;i<candidates.length;i+=20){
+        if(ticket!==serial)return;const part=candidates.slice(i,i+20);
+        try{
+          const body=await api('/api/structures?systems='+encodeURIComponent(part.map(r=>r.id).join(',')));if(ticket!==serial)return;
+          if(!body.systems||typeof body.systems!=='object'||Array.isArray(body.systems))throw Error('Neznámý formát staveb');
+          for(const candidate of part){
+            try{
+              const list=Object.prototype.hasOwnProperty.call(body.systems,candidate.id)?body.systems[candidate.id]:[],built=summarizeStructures(list,candidate.id);
+              if(built.miners>0){state.excluded.mined++;continue}
+              if(built.unknown||built.miners!==0){state.excluded.unknown++;continue}
+              if(built.foreignStations>0||built.unknownOwnerStations>0){state.excluded.occupied++;continue}
+              checked.push({...candidate,built,checkedAt:now()});
+            }catch{state.excluded.unknown++}
+          }
+        }catch{if(ticket!==serial)return;state.excluded.unknown+=part.length}
+        state.progress+=part.length;emit();if(i+20<candidates.length){await delay(150);if(ticket!==serial)return}
+      }
+      state.phase='resources';state.notice='Porovnávám generovaná ložiska…';emit();const results=[];
+      for(let i=0;i<checked.length;i++){
+        const candidate=checked[i];
+        try{
+          const info=deposits(world,seed,candidate.system);if(!info.resources.length||wanted&&!info.resources.includes(wanted)){state.excluded.unsuitable++;}else{
+          const extra=info.resources.filter(id=>!baseline.resources.includes(id));
+          const score=extra.length*30+info.resources.length*5+Math.min(10,info.richness)*2;
+          results.push({...candidate,...info,newResources:extra,score});}
+        }catch{state.excluded.unknown++}
+        if(i%5===4){await delay(0);if(ticket!==serial)return}
+      }
+      if(ticket!==serial)return;
+      state.rows=results.sort((a,b)=>Number(a.scouted)-Number(b.scouted)||b.score-a.score||a.distance-b.distance||a.id.localeCompare(b.id));state.at=now();state.phase='done';state.notice=state.rows.length?'Návrhy ověřeny bez serverem vrácených minerů. Ložiska jsou generovaná; nejde o potvrzení zbývajících zásob ani možnosti stavby.':'V prověřeném výběru nebyl vhodný systém bez minerů.';
+    }catch(e){if(ticket===serial){state.error=String(e.message||e);state.rows=[];state.phase='error'}}
+    finally{if(ticket===serial){state.busy=false;emit()}}
+  }
+  return {state,search,cancel,invalidate};
+}
   const STORE = 'aos-toolkit.v0.2';
   const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') } catch { return {} } })();
@@ -595,7 +694,7 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
     opened:false, tab:'summary', loaded:false, stations:[], stationId:'', view:null, meta:null,
     depositStatus:'unloaded', planets:[], depositNames:[], forecast:[], plan:[],
     error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position||old?.position, windowSize:saved?.windowSize||null,
-    fabPosition:saved?.fabPosition||null, fabMover:null, exploredOpened:false, exploredPosition:saved?.exploredPosition||null, exploredSize:saved?.exploredSize||null,
+    fabPosition:saved?.fabPosition||null, fabMover:null, exploredOpened:false, exploredTab:'list', exploredPosition:saved?.exploredPosition||null, exploredSize:saved?.exploredSize||null,
     audit:[], serverLog:[], querySerial:0, compact:false, writing:false
   };
   const debugTools=createDebugTools({catalog:GAME,api,getGame:()=>window.spacefactory,doc:document,onChange:()=>render(),
@@ -604,8 +703,11 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
   const progressAdvisor=createProgressAdvisor({catalog:GAME,api,productionFlows,loadAccount:options=>accountOverview.refresh(options),onChange:()=>render(),
     loadRules:async()=>{const [research,production,buildings]=await Promise.all([import('/src/research.js'),import('/src/production.js'),import('/src/buildings.js')]);
       return {...research,RECIPES:production.RECIPES,buildingById:buildings.buildingById}}});
-  let exploredLabel=null;
-  const exploredSystems=createExploredSystems({api,catalog:GAME,loadMap:async()=>{const [map,places]=await Promise.all([import('/src/world/mapgen.js'),import('/src/ui/places.js')]);exploredLabel=places.systemText;return map},systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored()});
+  let exploredLabel=null,exploredBuildingSpec=null;
+  const lookupExploredBuilding=id=>exploredBuildingSpec?.(id)||GAME.buildings[id];
+  const exploredSystems=createExploredSystems({api,catalog:GAME,buildingSpec:lookupExploredBuilding,loadMap:async()=>{const [map,places,buildings]=await Promise.all([import('/src/world/mapgen.js'),import('/src/ui/places.js'),import('/src/buildings.js')]);exploredLabel=places.systemText;exploredBuildingSpec=buildings.buildingById;return map},systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored()});
+  const expansionAdvisor=createExpansionAdvisor({api,catalog:GAME,summarizeStructures:(list,id)=>summarizeSystemStructures(list,id,lookupExploredBuilding),systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored(),
+    loadRules:async()=>{const [map,world,places,buildings]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/ui/places.js'),import('/src/buildings.js')]);exploredLabel=places.systemText;exploredBuildingSpec=buildings.buildingById;return {map,world}}});
   const fmt = x => Number.isFinite(Number(x)) ? Number(x).toLocaleString('cs-CZ',{maximumFractionDigits:2}) : '–';
   const num = (x, alt=0) => Number.isFinite(Number(x)) ? Number(x) : alt;
   const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -617,7 +719,7 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.5.2',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.5.3',at:new Date().toISOString(),station:state.stationId,
     requestsOn:state.view?.requestsOn,exportsOn:state.view?.exportsOn,groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -905,7 +1007,7 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.5.2',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.5.3',at:new Date().toISOString(),reference:GAME.version,
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -1059,38 +1161,55 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
   function exploredMarkup(){
     const d=exploredSystems.state,p=exploredSystems.page();
     return `<header id="explored-drag"><div><b>Prozkoumané systémy</b><small>Serverový průzkum · ${d.total} systémů</small></div><button data-explored="close" aria-label="Zavřít prozkoumané systémy">×</button></header>
-    <div class="explored-tools"><button data-explored="refresh" ${d.busy||state.writing?'disabled':''}>Načíst / obnovit</button><button data-explored="cancel" ${d.busy?'':'disabled'}>Zrušit načítání</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button>
-    <label>Hledat <input id="explored-query" type="search" value="${esc(d.query)}" placeholder="název nebo ID"></label><label>Zobrazit <select id="explored-filter">${[['all','Vše'],['stations','Se stanicí'],['miners','S minery'],['empty','Bez stanice a minerů']].map(([id,label])=>`<option value="${id}" ${d.filter===id?'selected':''}>${label}</option>`).join('')}</select></label></div>
+    <div class="tabs"><button data-explored="tabList" class="${state.exploredTab==='list'?'active':''}">Prozkoumané</button><button data-explored="tabExpansion" class="${state.exploredTab==='expansion'?'active':''}">Doporučené systémy</button></div>${state.exploredTab==='expansion'?expansionMarkup():`<div class="explored-tools"><button data-explored="refresh" ${d.busy||state.writing?'disabled':''}>Načíst / obnovit</button><button data-explored="cancel" ${d.busy?'':'disabled'}>Zrušit načítání</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button>
+    <label>Hledat <input id="explored-query" type="search" value="${esc(d.query)}" placeholder="název nebo ID"></label><label>Zobrazit <select id="explored-filter">${[['all','Vše'],['stations','Se stanicí'],['miners','S minery'],['empty','Bez stanice a minerů']].map(([id,label])=>`<option value="${id}" ${d.filter===id?'selected':''}>${label}</option>`).join('')}</select></label><label>Řadit <select id="explored-sort">${[['name','Název'],['stations','Počet stanic'],['miners','Počet minerů'],['upgrade','Upgrade (nejvyšší tier)']].map(([id,label])=>`<option value="${id}" ${d.sort===id?'selected':''}>${label}</option>`).join('')}</select></label><select id="explored-direction" aria-label="Směr řazení"><option value="asc" ${d.direction==='asc'?'selected':''}>Vzestupně</option><option value="desc" ${d.direction==='desc'?'selected':''}>Sestupně</option></select></div>
     <div class="status" role="status">${esc(d.error||d.notice)} ${d.busy?`Ověřeno ${d.progress}/${d.total}.`:''}</div>
     <div class="explored-body"><p>Kliknutí na název přesune kameru. Počty zahrnují všechny stavby, které server pro daný systém zpřístupní, včetně cizích. Neověřené údaje neznamenají prázdný systém.</p>
-    <div class="table"><table><thead><tr><th>Systém</th><th>Stanice</th><th>Mineři</th><th>Ověření</th></tr></thead><tbody id="explored-rows">${exploredRows(p.rows)}</tbody></table></div></div>
-    <footer><span id="explored-page">${p.total} výsledků · strana ${p.index+1}/${p.pages}</span><div><button data-explored="prev" ${p.index?'':'disabled'}>Předchozí</button><button data-explored="next" ${p.index+1<p.pages?'':'disabled'}>Další</button></div></footer>`;
+    <div class="table"><table><thead><tr><th>Systém</th><th><button data-explored-sort="stations">Stanice ↕</button></th><th><button data-explored-sort="miners">Mineři ↕</button></th><th><button data-explored-sort="upgrade">Upgrade ↕</button></th><th>Ověření</th></tr></thead><tbody id="explored-rows">${exploredRows(p.rows)}</tbody></table></div></div>
+    <footer><span id="explored-page">${p.total} výsledků · strana ${p.index+1}/${p.pages}</span><div><button data-explored="prev" ${p.index?'':'disabled'}>Předchozí</button><button data-explored="next" ${p.index+1<p.pages?'':'disabled'}>Další</button></div></footer>`}`;
   }
-  function exploredRows(rows){return rows.map(row=>`<tr><td><button class="system-link" data-explored-system="${esc(row.id)}" ${row.system?'':'disabled'}>${esc(row.name)}</button><small>${esc(row.id)}</small></td><td>${exploredCounts(row,'stations')}</td><td>${exploredCounts(row,'miners')}</td><td>${esc(row.error||row.checkedAt||'čeká na načtení')}${row.unknown?` · ${row.unknown} neznámých typů staveb`:''}</td></tr>`).join('')||'<tr><td colspan="4">Žádné výsledky.</td></tr>'}
+  function exploredRows(rows){return rows.map(row=>`<tr><td><button class="system-link" data-explored-system="${esc(row.id)}" ${row.system?'':'disabled'}>${esc(row.name)}</button><small>${esc(row.id)}</small></td><td>${exploredCounts(row,'stations')}</td><td>${exploredCounts(row,'miners')}</td><td>${row.upgradeTier==null||row.error?'neověřeno':row.upgradeTier?'T'+row.upgradeTier:'—'}<small>Stanice ${row.stationTier==null?'?':row.stationTier?'T'+row.stationTier:'—'} · mineři ${row.minerTier==null?'?':row.minerTier?'T'+row.minerTier:'—'}</small></td><td>${esc(row.error||row.checkedAt||'čeká na načtení')}${row.unknown?` · ${row.unknown} neznámých typů staveb`:''}</td></tr>`).join('')||'<tr><td colspan="5">Žádné výsledky.</td></tr>'}
+  function expansionMarkup(){
+    const d=expansionAdvisor.state,origin=state.view?.station?.system||debugTools.currentSystemId();
+    return `<div class="explored-tools"><p>Výchozí systém: ${esc(origin||'vyber stanici nebo otevři systém na mapě')}. Hledá se nejvýše 120 kandidátů; neprozkoumané mají přednost.</p>
+    <label>Okolí <select id="expansion-radius">${[250,500,1000].map(n=>`<option value="${n}" ${Number(d.radius)===n?'selected':''}>${n} ly</option>`).join('')}</select></label><label>Požadovaná surovina <select id="expansion-wanted"><option value="">Libovolná vhodná kombinace</option>${Object.keys(GAME.items).filter(id=>GAME.items[id].c==='raw').map(id=>`<option value="${esc(id)}" ${d.wanted===id?'selected':''}>${esc(item(id))}</option>`).join('')}</select></label>
+    <button data-explored="searchExpansion" ${d.busy||state.writing?'disabled':''}>Najít vhodné systémy</button><button data-explored="cancelExpansion" ${d.busy?'':'disabled'}>Zrušit hledání</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button></div>
+    <div class="status" role="status">${esc(d.error||d.notice)} ${d.busy?`Ověřeno ${d.progress}/${d.total} · ${esc({loading:'Načítání podkladů',map:'Hledání okolí',structures:'Ověření staveb',resources:'Porovnání ložisek'}[d.phase]||d.phase)}`:''}</div>
+    <div class="explored-body"><p>Neprozkoumané: nejdřív průzkum lodí, potom stavba a těžba. Skóre zvýhodňuje suroviny, které podle generátoru chybí ve výchozím systému, jejich rozmanitost a bohatost. Vyšší tier suroviny vyžaduje odpovídající miner. Neověřuje se dosah lodě, vyčerpání ani volné místo pro stavbu.</p>
+    ${d.at?`<p>Hledáno kolem ${esc(d.origin?.name)} · ${d.radius} ly · nalezeno ${d.nearby}, prověřeno ${d.total}${d.limited?' (omezený výběr 120)':''}. Vyřazeno: těžba ${d.excluded.mined}, cizí/nejistá stanice ${d.excluded.occupied}, neověřené ${d.excluded.unknown}, nevhodné suroviny ${d.excluded.unsuitable}. Stav k ${esc(d.at)}.</p>`:''}
+    ${d.rows.map((row,i)=>`<section class="sect"><button class="system-link" data-explored-source="expansion" data-explored-system="${esc(row.id)}">${i+1}. ${esc(row.name)}</button><small>${esc(row.id)} · ${fmt(row.distance)} ly · skóre ${fmt(row.score)}</small><p>${row.scouted?'Prozkoumaný, bez minerů':'Neprozkoumaný kandidát k průzkumu'} · ${row.built.ownStations?'vlastní stanice bez těžby':'server nevrátil stanici ani minery'}</p><p>Suroviny (generátor): ${esc(row.resources.map(item).join(', '))}</p><p>Navíc proti výchozímu systému: ${esc(row.newResources.map(item).join(', ')||'žádné nové druhy')} · průměrná bohatost ${fmt(row.richness)}. Stavby ověřeny ${esc(row.checkedAt)}.</p></section>`).join('')||'<p>Zatím žádné doporučené systémy. Spusť hledání nebo změň okolí či požadovanou surovinu.</p>'}</div>`;
+  }
   function bindExploredLinks(win){win.querySelectorAll('[data-explored-system]').forEach(b=>b.addEventListener('click',()=>{
-    const row=exploredSystems.state.rows.find(row=>row.id===b.dataset.exploredSystem);
-    try{if(!row?.system)throw Error('Systém není ověřen');debugTools.cameraToKnownSystem(row.system,{leaveStation:true});exploredSystems.state.error='';exploredSystems.state.notice='Kamera přesunuta na '+row.name}catch(e){exploredSystems.state.error=e.message}renderExplored();
+    const rows=b.dataset.exploredSource==='expansion'?expansionAdvisor.state.rows:exploredSystems.state.rows;
+    const row=rows.find(row=>row.id===b.dataset.exploredSystem);
+    try{if(!row?.system)throw Error('Systém není ověřen');debugTools.cameraToKnownSystem(row.system,{leaveStation:true});exploredSystems.state.error='';exploredSystems.state.notice='Kamera přesunuta na '+row.name;expansionAdvisor.state.error=''}catch(e){if(state.exploredTab==='expansion')expansionAdvisor.state.error=e.message;else exploredSystems.state.error=e.message}renderExplored();
   }))}
   function renderExplored(){
     const win=state.root?.getElementById('explored-window');if(!win)return;win.hidden=!state.exploredOpened;if(!state.exploredOpened)return;
     // Preserve focus and partially typed search text during background batch updates.
-    const active=win.querySelector('#explored-query'),focused=state.root.activeElement===active,start=active?.selectionStart,end=active?.selectionEnd;
+    const active=win.querySelector('#explored-query'),focused=!!active&&state.root.activeElement===active,start=active?.selectionStart,end=active?.selectionEnd;
     win.innerHTML=exploredMarkup();
     win.querySelector('#explored-drag').addEventListener('pointerdown',e=>drag(e,win,'exploredPosition'));
     win.querySelectorAll('[data-explored]').forEach(b=>b.addEventListener('click',()=>exploredAction(b.dataset.explored)));
-    const query=win.querySelector('#explored-query');query.addEventListener('input',e=>{exploredSystems.state.query=e.target.value;exploredSystems.state.page=0;renderExplored()});
-    win.querySelector('#explored-filter').addEventListener('change',e=>{exploredSystems.state.filter=e.target.value;exploredSystems.state.page=0;renderExplored()});bindExploredLinks(win);
+    const query=win.querySelector('#explored-query');query?.addEventListener('input',e=>{exploredSystems.state.query=e.target.value;exploredSystems.state.page=0;renderExplored()});
+    win.querySelector('#explored-filter')?.addEventListener('change',e=>{exploredSystems.state.filter=e.target.value;exploredSystems.state.page=0;renderExplored()});
+    for(const [id,key] of [['explored-sort','sort'],['explored-direction','direction']])win.querySelector('#'+id)?.addEventListener('change',e=>{exploredSystems.state[key]=e.target.value;exploredSystems.state.page=0;renderExplored()});
+    win.querySelectorAll('[data-explored-sort]').forEach(b=>b.addEventListener('click',()=>{const d=exploredSystems.state,key=b.dataset.exploredSort;d.direction=d.sort===key&&d.direction==='desc'?'asc':'desc';d.sort=key;d.page=0;renderExplored()}));
+    for(const [id,key] of [['expansion-radius','radius'],['expansion-wanted','wanted']])win.querySelector('#'+id)?.addEventListener('change',e=>{expansionAdvisor.invalidate();expansionAdvisor.state[key]=e.target.value;renderExplored()});bindExploredLinks(win);
     if(focused){query.focus({preventScroll:true});if(start!==null&&start!==undefined)query.setSelectionRange?.(start,end)}
   }
   async function exploredAction(name){
-    if(name==='close'){state.exploredOpened=false;exploredSystems.cancel();renderExplored();return}
+    if(name==='tabList'||name==='tabExpansion'){state.exploredTab=name==='tabList'?'list':'expansion';renderExplored();return}
+    if(name==='searchExpansion'){if(!state.writing)await expansionAdvisor.search({originId:state.view?.station?.system||debugTools.currentSystemId()});return}
+    if(name==='cancelExpansion'){expansionAdvisor.cancel();return}
+    if(name==='close'){state.exploredOpened=false;expansionAdvisor.cancel();exploredSystems.cancel();renderExplored();return}
     if(name==='cancel'){exploredSystems.cancel();return}
-    if(name==='refresh'){if(!state.writing)await exploredSystems.refresh();return}
-    if(name==='return'){try{debugTools.returnCamera();exploredSystems.state.error=''}catch(e){exploredSystems.state.error=e.message}}
+    if(name==='refresh'){if(!state.writing){expansionAdvisor.invalidate();await exploredSystems.refresh();}return}
+    if(name==='return'){const target=state.exploredTab==='expansion'?expansionAdvisor.state:exploredSystems.state;try{debugTools.returnCamera();target.error=''}catch(e){target.error=e.message}}
     if(name==='prev')exploredSystems.state.page--;if(name==='next')exploredSystems.state.page++;renderExplored();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.5.2 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.5.3 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
@@ -1100,14 +1219,14 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
     const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['debug','Debug'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.5.2 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.5.3 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><button data-act="exploredOpen" title="Samostatné okno prozkoumaných systémů">Systémy</button><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
      <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
      <main>${({summary,resources,galaxy,production,proposals,account:accountMenu,advisor:advisorMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
      <footer>All Out of Space · ${state.processing?'Probíhá operace':'Připraveno'} <button data-act="exportPlan">Export návrhů</button></footer>`;
-    panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;state.view=null;state.plan=[];state.selected.clear();loadView()});
+    panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;expansionAdvisor.invalidate();state.view=null;state.plan=[];state.selected.clear();loadView()});
     panel.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;render()}));
     panel.querySelectorAll('[data-act]').forEach(b=>b.addEventListener('click',()=>action(b.dataset.act)));
     panel.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('change',()=>{if(state.processing)return;b.checked?state.selected.add(b.dataset.plan):state.selected.delete(b.dataset.plan);render()}));
@@ -1143,7 +1262,7 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
     panel.querySelectorAll('[data-account]').forEach(b=>b.addEventListener('click',()=>accountAction(b.dataset.account)));
     panel.querySelectorAll('[data-account-open]').forEach(b=>b.addEventListener('click',()=>{
       if(state.processing||accountOverview.state.busy||progressAdvisor.state.busy)return;
-      state.stationId=b.dataset.accountOpen;state.view=null;state.plan=[];state.selected.clear();state.tab='summary';loadView();
+      state.stationId=b.dataset.accountOpen;expansionAdvisor.invalidate();state.view=null;state.plan=[];state.selected.clear();state.tab='summary';loadView();
     }));
     panel.querySelector('#account-filter')?.addEventListener('input',e=>{
       accountOverview.state.query=e.target.value;const query=e.target.value.toLocaleLowerCase('cs-CZ');
@@ -1161,7 +1280,7 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
     if(name==='addRequest'||name==='addExport'){addDraft(name==='addRequest'?'request':'export',state.root?.getElementById('panel')?.querySelector('#draft-item')?.value);render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.5.2',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'0.5.3',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,priority:p.priority,group:p.existing?.group??p.group,risk:p.risk,error:p.error}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -1192,7 +1311,7 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
       .plan{display:flex;align-items:flex-start;gap:9px;padding:8px 6px;border:1px solid #314f5f;border-radius:7px;margin-top:5px}.plan.same{opacity:.8}.draft-fields{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.draft-fields label{display:grid;gap:3px}.draft-fields input{width:130px}.draft-fields input,.draft-fields select,#draft-item{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:5px;padding:5px;max-width:100%}.info{min-width:0}.plan input{margin-top:3px}.info{flex:1}.info strong{color:#e7f9ff}.info small{display:block;color:#a9c7d2}.info b{color:#fff}.caution{color:#ffcc7b!important}.tick{display:flex;gap:8px;align-items:center;margin:8px 0}.warning{padding:9px;background:#4b3b20;border-radius:7px;color:#ffde9b}.dangerbtn{background:#762b30!important;border-color:#c85656!important}pre{overflow:auto;background:#162f3b;padding:9px}footer{display:flex;justify-content:space-between;align-items:center;font-size:10px;padding:8px 12px;background:#1a303e;color:#b4c8d3}
       #debug-system,#debug-planet,[id^="advisor-"],#account-filter{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
       #explored-window{pointer-events:auto;position:fixed;z-index:2;left:25px;top:100px;width:min(800px,calc(100vw - 16px));height:480px;min-width:min(320px,calc(100vw - 16px));min-height:min(260px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);resize:both;overflow:hidden;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #527d8f;border-radius:12px;font:12px/1.45 system-ui;box-shadow:0 15px 45px #000b}
-      #explored-window[hidden]{display:none}#explored-window header button{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif}#explored-window .explored-body{flex:1;min-height:80px;overflow:auto;padding:10px}#explored-window .explored-tools{display:flex;flex-wrap:wrap;gap:6px;padding:8px}#explored-window label{display:flex;align-items:center;gap:5px}#explored-window input,#explored-window select{max-width:220px;background:#182e3b;color:#fff;border:1px solid #587080;padding:5px;border-radius:5px}#explored-window button[data-explored],#explored-window .system-link{background:#21586a;color:#e4faff;border:1px solid #3b91a0;border-radius:5px;padding:5px 7px}#explored-window .system-link{text-align:left;text-decoration:underline;background:transparent;border:0;color:#8bdcef;padding:0}#explored-window td small{display:block;color:#afc6d1}#explored-window header{flex-shrink:0}#explored-window footer{gap:5px}
+      #explored-window[hidden]{display:none}#explored-window header button{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif}#explored-window .explored-body{flex:1;min-height:80px;overflow:auto;padding:10px}#explored-window .explored-tools{display:flex;flex-wrap:wrap;gap:6px;padding:8px}#explored-window label{display:flex;align-items:center;gap:5px}#explored-window input,#explored-window select{max-width:220px;background:#182e3b;color:#fff;border:1px solid #587080;padding:5px;border-radius:5px}#explored-window button[data-explored],#explored-window .system-link{background:#21586a;color:#e4faff;border:1px solid #3b91a0;border-radius:5px;padding:5px 7px}#explored-window .system-link{text-align:left;text-decoration:underline;background:transparent;border:0;color:#8bdcef;padding:0}#explored-window td small{display:block;color:#afc6d1}#explored-window .tabs button[data-explored]{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:#b5c8d5}#explored-window .tabs button.active{color:#fff;border-bottom-color:#61c2d7}#explored-window button[data-explored-sort]{background:transparent;border:0;color:#b5e6ed;font-weight:bold;padding:0}#explored-window .sect small{display:block;color:#a9c7d2;margin:5px 0}#explored-window header{flex-shrink:0}#explored-window footer{gap:5px}
       @media(max-width:670px){#panel{top:8px;left:8px!important;right:auto!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
     const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit · přesuň tažením';state.fabMover=makeMovableButton(fab,{getPosition:()=>state.fabPosition,setPosition:p=>{state.fabPosition=p},viewport:()=>({width:innerWidth,height:innerHeight}),save});fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
     const panel=document.createElement('section');panel.id='panel';panel.hidden=true;
@@ -1222,8 +1341,8 @@ function makeMovableButton(button,{getPosition,setPosition,viewport,save}){
   }
   document.addEventListener('spacefactory:auth',e=>{
     if(e.detail?.profile)return;
-    state.exploredOpened=false;exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
+    state.exploredOpened=false;expansionAdvisor.invalidate();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
   });
-  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>exploredSystems.stale());
+  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{exploredSystems.stale();expansionAdvisor.invalidate()});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 })();
