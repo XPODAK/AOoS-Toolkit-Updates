@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.5.0
+// @version      0.5.1
 // @description  Account overview, network-aware progression advisor, Smart Logistics and client Debug tools (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
