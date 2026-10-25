@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.5.3
-// @description  Account overview, network-aware progression advisor, Smart Logistics and client Debug tools (CZ)
+// @version      0.6.0
+// @description  Galaxy Scanner, explored systems, account advisor, approved logistics and client Debug tools (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
 // @updateURL    https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.meta.js
@@ -684,6 +684,100 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
   }
   return {state,search,cancel,invalidate};
 }
+// Generated resource search with explicit coverage budgets and optional live eligibility checks.
+function scannerResourcesMatch(planets,requested,mode='all',scope='system'){
+  const fits=ids=>mode==='all'?requested.every(id=>ids.has(id)):requested.some(id=>ids.has(id));
+  if(scope==='planet')return planets.filter(p=>fits(new Set(p.resources))).map(p=>p.letter);
+  const union=new Set(planets.flatMap(p=>p.resources));return fits(union)?planets.filter(p=>p.resources.some(id=>requested.includes(id))).map(p=>p.letter):[];
+}
+function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLabel=(id,s)=>s.name,onChange=()=>{},delay=ms=>new Promise(resolve=>setTimeout(resolve,ms)),now=()=>new Date().toISOString()}){
+  const defaults={resources:[],mode:'all',scope:'system',radius:1000,sectorLimit:512,systemLimit:2000,resultLimit:200,exploration:'new',onlyIdle:true};
+  const state={config:{...defaults,resources:[]},busy:false,error:'',notice:'Vyber suroviny a spusť scanner.',rows:[],origin:null,at:null,phase:'idle',complete:false,canceled:false,sectors:0,totalSectors:0,visited:0,generated:0,matches:0,failed:0,excluded:0,verificationFailed:0,limits:{},page:0};let serial=0;
+  const emit=()=>onChange();let paintedAt=0;
+  const progressEmit=()=>{const time=Date.now();if(time-paintedAt>=100){paintedAt=time;emit()}};
+  function invalidate(notify=true){serial++;Object.assign(state,{busy:false,error:'',rows:[],origin:null,at:null,complete:false,canceled:false,phase:'idle',page:0,notice:'Podklady nebo volby se změnily; spusť nové hledání.'});if(notify)emit()}
+  function cancel(){if(!state.busy)return;serial++;Object.assign(state,{busy:false,complete:false,canceled:true,phase:'canceled',at:now(),notice:'Zrušeno. Zobrazené řádky jsou pouze dokončená dílčí část hledání.'});emit()}
+  function page(){const pages=Math.max(1,Math.ceil(state.rows.length/50));state.page=Math.max(0,Math.min(state.page,pages-1));return {rows:state.rows.slice(state.page*50,state.page*50+50),index:state.page,pages,total:state.rows.length}}
+  async function search({center,...options}={}){
+    if(state.busy)return;
+    const ticket=++serial;Object.assign(state,{busy:true,error:'',notice:'Načítám podklady scanneru…',rows:[],origin:null,at:null,phase:'loading',complete:false,canceled:false,sectors:0,totalSectors:0,visited:0,generated:0,matches:0,failed:0,excluded:0,verificationFailed:0,limits:{},page:0});emit();
+    try{
+      if(ticket!==serial)return;
+      const opts={...state.config,...options,resources:[...(options.resources??state.config.resources)]};
+      for(const [key,min,max] of [['radius',50,5000],['sectorLimit',1,4096],['systemLimit',1,20000],['resultLimit',1,2000]]){opts[key]=Number(opts[key]);if(!Number.isInteger(opts[key])||opts[key]<min||opts[key]>max)throw Error('Neplatný limit '+key+' ('+min+'–'+max+')')}
+      opts.resources=[...new Set(opts.resources)];if(!opts.resources.length||opts.resources.some(id=>catalog.items[id]?.c!=='raw'))throw Error('Vyber alespoň jednu známou těženou surovinu');
+      if(!['all','any'].includes(opts.mode)||!['system','planet'].includes(opts.scope)||!['all','new','known'].includes(opts.exploration)||typeof opts.onlyIdle!=='boolean')throw Error('Neplatné volby scanneru');
+      if(!center||center.systemId!==undefined&&!/^-?\d{1,10}\.-?\d{1,10}\.\d{1,3}$/.test(center.systemId)||center.systemId===undefined&&(!Number.isFinite(center.x)||!Number.isFinite(center.y)))throw Error('Zadej platný systém nebo souřadnice středu');
+      state.config={...opts,resources:[...opts.resources]};
+      const units=await api('/api/units');if(ticket!==serial)return;
+      if(!Array.isArray(units.scouted)||units.scouted.some(id=>typeof id!=='string'||!/^[-]?\d{1,10}\.[-]?\d{1,10}\.\d{1,3}$/.test(id)))throw Error('Neznámý seznam průzkumu');const scouted=new Set(units.scouted);
+      const meta=await api('/api/map/meta');if(ticket!==serial)return;
+      if(!['number','string'].includes(typeof meta.seed)||String(meta.seed).trim()===''||!Number.isSafeInteger(Number(meta.seed)))throw Error('Chybí platný seed');const seed=Number(meta.seed);
+      const {map,world,deposits}=await loadRules();if(ticket!==serial)return;
+      let origin=center.systemId!==undefined?map.systemById(seed,center.systemId):{x:center.x,y:center.y};
+      if(!origin||!Number.isFinite(origin.x)||!Number.isFinite(origin.y)||(center.systemId!==undefined&&origin.id!==center.systemId))throw Error('Střed hledání nelze přeložit');
+      if(Number.isFinite(map.WORLD_EDGE)&&(Math.abs(origin.x)>map.WORLD_EDGE||Math.abs(origin.y)>map.WORLD_EDGE))throw Error('Souřadnice jsou mimo mapu');
+      state.origin={id:origin.id??null,x:origin.x,y:origin.y,name:origin.id?systemLabel(origin.id,origin):'Vlastní souřadnice'};
+      const range=map.sectorRange(origin.x-opts.radius,origin.y-opts.radius,origin.x+opts.radius,origin.y+opts.radius),size=map.SECTOR;
+      if(!Number.isFinite(size)||size<=0||!range||![range.sx0,range.sx1,range.sy0,range.sy1].every(Number.isInteger)||range.sx1<range.sx0||range.sy1<range.sy0||(range.sx1-range.sx0+1)*(range.sy1-range.sy0+1)>8192)throw Error('Neplatný nebo příliš velký rozsah sektorů');
+      const sectors=[];
+      for(let sy=range.sy0;sy<=range.sy1;sy++)for(let sx=range.sx0;sx<=range.sx1;sx++){
+        const dx=Math.max(sx*size-origin.x,0,origin.x-(sx+1)*size),dy=Math.max(sy*size-origin.y,0,origin.y-(sy+1)*size);
+        const d=Math.hypot(dx,dy);if(d<=opts.radius)sectors.push({sx,sy,d});
+      }
+      sectors.sort((a,b)=>a.d-b.d||a.sy-b.sy||a.sx-b.sx);state.totalSectors=sectors.length;state.phase='scan';state.notice='Prohledávám generovaná ložiska…';emit();
+      const seen=new Set(),pending=[];let stopped=false;
+      function append(row){if(state.rows.length>=opts.resultLimit){state.limits.results=true;stopped=true;return}state.rows.push(row);if(state.rows.length>=opts.resultLimit){state.limits.results=true;stopped=true}}
+      async function flush(){
+        if(!pending.length||ticket!==serial)return;const part=pending.splice(0,20);state.phase='verify';emit();if(ticket!==serial)return;
+        try{
+          const body=await api('/api/structures?systems='+encodeURIComponent(part.map(r=>r.id).join(',')));if(ticket!==serial)return;
+          if(!body.systems||typeof body.systems!=='object'||Array.isArray(body.systems))throw Error('Neplatné stavby');
+          for(const row of part){
+            try{
+              const list=Object.prototype.hasOwnProperty.call(body.systems,row.id)?body.systems[row.id]:[],built=summarizeStructures(list,row.id);
+              if(built.unknown||built.miners!==0||built.foreignStations>0||built.unknownOwnerStations>0){state.excluded++;continue}
+              append({...row,built,checkedAt:now(),verification:'idle'});if(stopped)break;
+            }catch{state.verificationFailed++}
+          }
+        }catch{if(ticket!==serial)return;state.verificationFailed+=part.length}
+        state.phase='scan';emit();if(!stopped){await delay(150)}
+      }
+      outer:for(const sector of sectors){
+        if(ticket!==serial)return;if(state.sectors>=opts.sectorLimit){state.limits.sectors=true;break}
+        state.sectors++;const systems=map.sectorSystems(seed,sector.sx,sector.sy);
+        if(!Array.isArray(systems)||systems.length>64)throw Error('Neznámý formát sektoru');
+        for(const system of systems){
+          if(ticket!==serial)return;
+          if(!system||typeof system.id!=='string'||!/^[-]?\d{1,10}\.[-]?\d{1,10}\.\d{1,3}$/.test(system.id)||!Number.isFinite(system.x)||!Number.isFinite(system.y))throw Error('Neplatná data systému');
+          const distance=Math.hypot(system.x-origin.x,system.y-origin.y);if(seen.has(system.id)||distance>opts.radius)continue;seen.add(system.id);
+          if(state.visited>=opts.systemLimit){state.limits.systems=true;break outer}state.visited++;
+          const known=scouted.has(system.id);if(opts.exploration==='new'&&known||opts.exploration==='known'&&!known)continue;
+          state.generated++;
+          try{
+            const generated=world.generateSystem(seed,system);if(!Array.isArray(generated?.bodies))throw Error('Neznámé planety');const letters=new Set(),planets=[];
+            for(const p of generated.bodies.filter(p=>p?.letter)){
+              if(typeof p.letter!=='string'||letters.has(p.letter)||!Array.isArray(p.deposits)||p.deposits.some(id=>catalog.items[id]?.c!=='raw'))throw Error('Neznámá ložiska');letters.add(p.letter);
+              const richness=world.richnessOf(p);if(!Number.isFinite(richness)||richness<0)throw Error('Neznámá bohatost');const initialUnits={};
+              for(const id of p.deposits){const n=deposits.depositSize(id,richness);if(!Number.isFinite(n)||n<0)throw Error('Neznámá velikost ložiska');initialUnits[id]=n}
+              planets.push({letter:p.letter,resources:[...new Set(p.deposits)],richness,initialUnits});
+            }
+            const matchingPlanets=scannerResourcesMatch(planets,opts.resources,opts.mode,opts.scope);
+            if(matchingPlanets.length){state.matches++;const row={id:system.id,name:systemLabel(system.id,system)||system.name,system,distance,scouted:known,resources:[...new Set(planets.flatMap(p=>p.resources))],planets,matchingPlanets,verification:'generated-only',built:null,checkedAt:null};
+              if(opts.onlyIdle){pending.push(row);if(pending.length>=20){await flush();if(ticket!==serial)return}}else append(row);
+            }
+          }catch{state.failed++}
+          if(stopped)break outer;if(state.generated%5===0){progressEmit();await delay(0);if(ticket!==serial)return}
+        }
+        progressEmit();await delay(0);if(ticket!==serial)return;
+      }
+      if(!stopped)await flush();if(ticket!==serial)return;
+      state.rows.sort((a,b)=>a.distance-b.distance||a.id.localeCompare(b.id));state.at=now();state.complete=!Object.keys(state.limits).length&&!state.failed&&!state.verificationFailed;state.phase='done';state.notice=state.complete?'Hledání v celém zadaném rozsahu dokončeno.':'Dílčí výsledek: dosažený limit nebo neověřené systémy. Podrobnosti jsou níže.';
+    }catch(e){if(ticket===serial){state.error=String(e.message||e);state.complete=false;state.phase='error'}}
+    finally{if(ticket===serial){state.busy=false;emit()}}
+  }
+  return {state,search,cancel,invalidate,page};
+}
   const STORE = 'aos-toolkit.v0.2';
   const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') } catch { return {} } })();
@@ -694,7 +788,7 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
     opened:false, tab:'summary', loaded:false, stations:[], stationId:'', view:null, meta:null,
     depositStatus:'unloaded', planets:[], depositNames:[], forecast:[], plan:[],
     error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position||old?.position, windowSize:saved?.windowSize||null,
-    fabPosition:saved?.fabPosition||null, fabMover:null, exploredOpened:false, exploredTab:'list', exploredPosition:saved?.exploredPosition||null, exploredSize:saved?.exploredSize||null,
+    fabPosition:saved?.fabPosition||null, fabMover:null, exploredOpened:false, exploredTab:'list', exploredMinimized:!!saved?.exploredMinimized, scannerOriginMode:'station', scannerOriginId:'', scannerX:'', scannerY:'', exploredPosition:saved?.exploredPosition||null, exploredSize:saved?.exploredSize||null,
     audit:[], serverLog:[], querySerial:0, compact:false, writing:false
   };
   const debugTools=createDebugTools({catalog:GAME,api,getGame:()=>window.spacefactory,doc:document,onChange:()=>render(),
@@ -708,6 +802,8 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
   const exploredSystems=createExploredSystems({api,catalog:GAME,buildingSpec:lookupExploredBuilding,loadMap:async()=>{const [map,places,buildings]=await Promise.all([import('/src/world/mapgen.js'),import('/src/ui/places.js'),import('/src/buildings.js')]);exploredLabel=places.systemText;exploredBuildingSpec=buildings.buildingById;return map},systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored()});
   const expansionAdvisor=createExpansionAdvisor({api,catalog:GAME,summarizeStructures:(list,id)=>summarizeSystemStructures(list,id,lookupExploredBuilding),systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored(),
     loadRules:async()=>{const [map,world,places,buildings]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/ui/places.js'),import('/src/buildings.js')]);exploredLabel=places.systemText;exploredBuildingSpec=buildings.buildingById;return {map,world}}});
+  const galaxyScanner=createGalaxyScanner({api,catalog:GAME,summarizeStructures:(list,id)=>summarizeSystemStructures(list,id,lookupExploredBuilding),systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored(),
+    loadRules:async()=>{const [map,world,deposits,places,buildings]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/deposits.js'),import('/src/ui/places.js'),import('/src/buildings.js')]);exploredLabel=places.systemText;exploredBuildingSpec=buildings.buildingById;return {map,world,deposits}}});
   const fmt = x => Number.isFinite(Number(x)) ? Number(x).toLocaleString('cs-CZ',{maximumFractionDigits:2}) : '–';
   const num = (x, alt=0) => Number.isFinite(Number(x)) ? Number(x) : alt;
   const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -715,11 +811,11 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
   const stack = id => GAME.items[id]?.s || null;
   const places = value => [value].flat().filter(Boolean);
   const maxStack = (view,id) => Math.round(num(GAME.buildings[view?.station?.building]?.s,20) * (stack(id)||0));
-  const save = () => { try { localStorage.setItem(STORE,JSON.stringify({settings:{...settings,enableWrites:false},position:state.position,windowSize:state.windowSize,fabPosition:state.fabPosition,exploredPosition:state.exploredPosition,exploredSize:state.exploredSize})) } catch {} };
+  const save = () => { try { localStorage.setItem(STORE,JSON.stringify({settings:{...settings,enableWrites:false},position:state.position,windowSize:state.windowSize,fabPosition:state.fabPosition,exploredPosition:state.exploredPosition,exploredSize:state.exploredSize,exploredMinimized:state.exploredMinimized})) } catch {} };
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.5.3',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.6.0',at:new Date().toISOString(),station:state.stationId,
     requestsOn:state.view?.requestsOn,exportsOn:state.view?.exportsOn,groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -1007,7 +1103,7 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.5.3',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.6.0',at:new Date().toISOString(),reference:GAME.version,
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -1160,8 +1256,10 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
   function exploredCounts(row,key){const n=row[key];return n===null||row.error?'neověřeno':n>0?`${n}${row.unknown?' + ?':''}`:row.unknown?'neověřeno':'ne'}
   function exploredMarkup(){
     const d=exploredSystems.state,p=exploredSystems.page();
-    return `<header id="explored-drag"><div><b>Prozkoumané systémy</b><small>Serverový průzkum · ${d.total} systémů</small></div><button data-explored="close" aria-label="Zavřít prozkoumané systémy">×</button></header>
-    <div class="tabs"><button data-explored="tabList" class="${state.exploredTab==='list'?'active':''}">Prozkoumané</button><button data-explored="tabExpansion" class="${state.exploredTab==='expansion'?'active':''}">Doporučené systémy</button></div>${state.exploredTab==='expansion'?expansionMarkup():`<div class="explored-tools"><button data-explored="refresh" ${d.busy||state.writing?'disabled':''}>Načíst / obnovit</button><button data-explored="cancel" ${d.busy?'':'disabled'}>Zrušit načítání</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button>
+    const header=`<header id="explored-drag"><div><b>Systémy · Galaxy Scanner</b><small>${galaxyScanner.state.busy?'Scanner běží · '+galaxyScanner.state.visited+' systémů':state.exploredTab==='scanner'&&galaxyScanner.state.at?'Scanner · '+galaxyScanner.state.rows.length+' shod'+(galaxyScanner.state.complete?'':' · dílčí výsledek'):`Serverový průzkum · ${d.total} systémů`}</small></div><div class="window-controls"><button data-explored="minimize" aria-label="${state.exploredMinimized?'Obnovit okno':'Minimalizovat okno'}" aria-expanded="${!state.exploredMinimized}">${state.exploredMinimized?'□':'−'}</button><button data-explored="close" aria-label="Zavřít prozkoumané systémy">×</button></div></header>`;
+    if(state.exploredMinimized)return header;
+    return `${header}
+    <div class="tabs"><button data-explored="tabList" class="${state.exploredTab==='list'?'active':''}">Prozkoumané</button><button data-explored="tabExpansion" class="${state.exploredTab==='expansion'?'active':''}">Doporučené systémy</button><button data-explored="tabScanner" class="${state.exploredTab==='scanner'?'active':''}">Galaxy Scanner</button></div>${state.exploredTab==='scanner'?scannerMarkup():state.exploredTab==='expansion'?expansionMarkup():`<div class="explored-tools"><button data-explored="refresh" ${d.busy||state.writing?'disabled':''}>Načíst / obnovit</button><button data-explored="cancel" ${d.busy?'':'disabled'}>Zrušit načítání</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button>
     <label>Hledat <input id="explored-query" type="search" value="${esc(d.query)}" placeholder="název nebo ID"></label><label>Zobrazit <select id="explored-filter">${[['all','Vše'],['stations','Se stanicí'],['miners','S minery'],['empty','Bez stanice a minerů']].map(([id,label])=>`<option value="${id}" ${d.filter===id?'selected':''}>${label}</option>`).join('')}</select></label><label>Řadit <select id="explored-sort">${[['name','Název'],['stations','Počet stanic'],['miners','Počet minerů'],['upgrade','Upgrade (nejvyšší tier)']].map(([id,label])=>`<option value="${id}" ${d.sort===id?'selected':''}>${label}</option>`).join('')}</select></label><select id="explored-direction" aria-label="Směr řazení"><option value="asc" ${d.direction==='asc'?'selected':''}>Vzestupně</option><option value="desc" ${d.direction==='desc'?'selected':''}>Sestupně</option></select></div>
     <div class="status" role="status">${esc(d.error||d.notice)} ${d.busy?`Ověřeno ${d.progress}/${d.total}.`:''}</div>
     <div class="explored-body"><p>Kliknutí na název přesune kameru. Počty zahrnují všechny stavby, které server pro daný systém zpřístupní, včetně cizích. Neověřené údaje neznamenají prázdný systém.</p>
@@ -1179,37 +1277,90 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
     ${d.at?`<p>Hledáno kolem ${esc(d.origin?.name)} · ${d.radius} ly · nalezeno ${d.nearby}, prověřeno ${d.total}${d.limited?' (omezený výběr 120)':''}. Vyřazeno: těžba ${d.excluded.mined}, cizí/nejistá stanice ${d.excluded.occupied}, neověřené ${d.excluded.unknown}, nevhodné suroviny ${d.excluded.unsuitable}. Stav k ${esc(d.at)}.</p>`:''}
     ${d.rows.map((row,i)=>`<section class="sect"><button class="system-link" data-explored-source="expansion" data-explored-system="${esc(row.id)}">${i+1}. ${esc(row.name)}</button><small>${esc(row.id)} · ${fmt(row.distance)} ly · skóre ${fmt(row.score)}</small><p>${row.scouted?'Prozkoumaný, bez minerů':'Neprozkoumaný kandidát k průzkumu'} · ${row.built.ownStations?'vlastní stanice bez těžby':'server nevrátil stanici ani minery'}</p><p>Suroviny (generátor): ${esc(row.resources.map(item).join(', '))}</p><p>Navíc proti výchozímu systému: ${esc(row.newResources.map(item).join(', ')||'žádné nové druhy')} · průměrná bohatost ${fmt(row.richness)}. Stavby ověřeny ${esc(row.checkedAt)}.</p></section>`).join('')||'<p>Zatím žádné doporučené systémy. Spusť hledání nebo změň okolí či požadovanou surovinu.</p>'}</div>`;
   }
+  function scannerMarkup(){
+    const d=galaxyScanner.state,c=d.config,p=galaxyScanner.page();
+    const options=(items,value)=>items.map(([id,label])=>`<option value="${id}" ${value===id?'selected':''}>${label}</option>`).join('');
+    return `<div class="scanner-controls"><div class="explored-tools"><label>Střed <select id="scanner-origin-mode">${options([['station','Vybraná stanice'],['map','Systém mapy'],['id','Vlastní ID systému'],['point','Souřadnice x, y']],state.scannerOriginMode)}</select></label>
+      ${state.scannerOriginMode==='id'?`<label>ID <input id="scanner-origin-id" value="${esc(state.scannerOriginId)}" placeholder="sx.sy.cell"></label>`:state.scannerOriginMode==='point'?`<label>X <input id="scanner-x" type="number" value="${esc(state.scannerX)}"></label><label>Y <input id="scanner-y" type="number" value="${esc(state.scannerY)}"></label>`:`<p>${esc(state.scannerOriginMode==='station'?state.view?.station?.system||'Nejprve načti stanici':debugTools.currentSystemId()||'Otevři systém na mapě')}</p>`}
+      ${[['radius','Radius (ly)',50,5000],['sectorLimit','Max. sektorů',1,4096],['systemLimit','Max. systémů',1,20000],['resultLimit','Max. výsledků',1,2000]].map(([key,label,min,max])=>`<label>${label}<input data-scanner-value="${key}" type="number" min="${min}" max="${max}" step="1" value="${esc(c[key])}"></label>`).join('')}
+      <label>Shoda <select data-scanner-value="mode">${options([['all','Všechny vybrané suroviny'],['any','Alespoň jedna surovina']],c.mode)}</select></label><label>Kombinace <select data-scanner-value="scope">${options([['system','V celém systému'],['planet','Na jedné planetě']],c.scope)}</select></label><label>Průzkum <select data-scanner-value="exploration">${options([['new','Neprozkoumané'],['known','Prozkoumané'],['all','Všechny']],c.exploration)}</select></label>
+      <label class="tick"><input id="scanner-idle" type="checkbox" ${c.onlyIdle?'checked':''}> Jen bez minerů a cizí stanice (ověřit serverem)</label>
+      <button data-explored="scan" ${d.busy||state.writing?'disabled':''}>Spustit scanner</button><button data-explored="cancelScan" ${d.busy?'':'disabled'}>Zrušit hledání</button><button data-explored="exportScan" ${d.rows.length?'':'disabled'}>Export JSON</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button></div>
+      <div class="scanner-resources">${Object.keys(GAME.items).filter(id=>GAME.items[id].c==='raw').sort((a,b)=>GAME.items[a].t-GAME.items[b].t||item(a).localeCompare(item(b))).map(id=>`<label><input type="checkbox" data-scanner-resource="${esc(id)}" ${c.resources.includes(id)?'checked':''}>T${GAME.items[id].t} · ${esc(item(id))}</label>`).join('')}</div></div>
+      <div id="scanner-status" class="status" role="status">${esc(d.error||d.notice)} · sektory ${d.sectors}/${d.totalSectors}, systémů ${d.visited}, generováno ${d.generated}, shod ${d.matches}, výsledků ${d.rows.length}.</div>
+      <div class="explored-body" id="scanner-results"><p>Ložiska a jejich počáteční velikosti jsou generované. Aktuální zůstatky, dosah lodí a možnost stavby nejsou potvrzené. ${c.onlyIdle?'Výsledky projdou čerstvým ověřením staveb.':'Zobrazuješ všechny generované shody bez ověření těžby; nejde o doporučení k obsazení.'}</p>
+      ${d.origin?`<p>Střed výsledku: ${esc(d.origin.name)} (${fmt(d.origin.x)}, ${fmt(d.origin.y)}) · ${d.at?esc(d.at):'hledání běží'}. ${Object.keys(d.limits).length?`Dosažené limity: ${esc(Object.keys(d.limits).map(key=>({sectors:'sektory',systems:'systémy',results:'výsledky'}[key])).join(', '))}. Výběr není úplný ani zaručeně nejbližší.`:''} Chyby generování ${d.failed}; neověřené stavby ${d.verificationFailed}; vyřazeno ${d.excluded}.</p>`:''}
+      ${p.rows.map(row=>`<section class="sect"><button class="system-link" data-explored-source="scanner" data-explored-system="${esc(row.id)}">${esc(row.name)}</button><small>${esc(row.id)} · ${fmt(row.distance)} ly · x ${fmt(row.system.x)}, y ${fmt(row.system.y)} · ${row.scouted?'prozkoumaný':'neprozkoumaný'}</small><p>${row.verification==='idle'?'Server nevrátil minery ani cizí stanici · ověřeno '+esc(row.checkedAt):'Pouze generátor · stavby a těžba neověřené'}</p>${row.planets.filter(planet=>row.matchingPlanets.includes(planet.letter)).map(planet=>`<p>Planeta ${esc(planet.letter)} · bohatost ${fmt(planet.richness)}: ${planet.resources.map(id=>`${esc(item(id))} (počáteční ${fmt(planet.initialUnits[id])} ks)`).join(', ')}</p>`).join('')}</section>`).join('')||'<p>Zatím žádné výsledky. Vyber suroviny a spusť hledání.</p>'}</div>
+      <footer id="scanner-footer">${p.total} výsledků · strana ${p.index+1}/${p.pages}<div><button data-explored="scanPrev" ${p.index?'':'disabled'}>Předchozí</button><button data-explored="scanNext" ${p.index+1<p.pages?'':'disabled'}>Další</button></div></footer>`;
+  }
+  function scannerCenter(){
+    if(state.scannerOriginMode==='point')return {x:String(state.scannerX).trim()===''?NaN:Number(state.scannerX),y:String(state.scannerY).trim()===''?NaN:Number(state.scannerY)};
+    return {systemId:state.scannerOriginMode==='id'?state.scannerOriginId.trim():state.scannerOriginMode==='map'?debugTools.currentSystemId():state.view?.station?.system||''};
+  }
   function bindExploredLinks(win){win.querySelectorAll('[data-explored-system]').forEach(b=>b.addEventListener('click',()=>{
-    const rows=b.dataset.exploredSource==='expansion'?expansionAdvisor.state.rows:exploredSystems.state.rows;
+    const rows=b.dataset.exploredSource==='scanner'?galaxyScanner.state.rows:b.dataset.exploredSource==='expansion'?expansionAdvisor.state.rows:exploredSystems.state.rows;
     const row=rows.find(row=>row.id===b.dataset.exploredSystem);
-    try{if(!row?.system)throw Error('Systém není ověřen');debugTools.cameraToKnownSystem(row.system,{leaveStation:true});exploredSystems.state.error='';exploredSystems.state.notice='Kamera přesunuta na '+row.name;expansionAdvisor.state.error=''}catch(e){if(state.exploredTab==='expansion')expansionAdvisor.state.error=e.message;else exploredSystems.state.error=e.message}renderExplored();
+    try{if(!row?.system)throw Error('Systém není ověřen');debugTools.cameraToKnownSystem(row.system,{leaveStation:true});exploredSystems.state.error='';exploredSystems.state.notice='Kamera přesunuta na '+row.name;expansionAdvisor.state.error='';galaxyScanner.state.error=''}catch(e){if(state.exploredTab==='scanner')galaxyScanner.state.error=e.message;else if(state.exploredTab==='expansion')expansionAdvisor.state.error=e.message;else exploredSystems.state.error=e.message}renderExplored();
   }))}
   function renderExplored(){
     const win=state.root?.getElementById('explored-window');if(!win)return;win.hidden=!state.exploredOpened;if(!state.exploredOpened)return;
+    const minimizedButton=win.querySelector('[data-explored="minimize"]');
+    if(state.exploredMinimized&&minimizedButton?.getAttribute?.('aria-expanded')==='false'){
+      const subtitle=win.querySelector('header small');if(subtitle)subtitle.textContent=galaxyScanner.state.busy?`Scanner běží · ${galaxyScanner.state.visited} systémů`:galaxyScanner.state.at?`Scanner · ${galaxyScanner.state.rows.length} shod`:`Serverový průzkum · ${exploredSystems.state.total} systémů`;return;
+    }
+    // Scanner progress updates must not replace controls between pointerdown and click.
+    const scannerStatus=win.querySelector('#scanner-status');
+    if(state.exploredTab==='scanner'&&!state.exploredMinimized&&galaxyScanner.state.busy&&scannerStatus){
+      const d=galaxyScanner.state;scannerStatus.textContent=`${d.notice} · sektory ${d.sectors}/${d.totalSectors}, systémů ${d.visited}, generováno ${d.generated}, shod ${d.matches}, výsledků ${d.rows.length}.`;
+      const result=win.querySelector('#scanner-results');if(result){result.hidden=false;result.textContent=`Hledání běží. Dokončených shod: ${d.rows.length}. Řádky se zobrazí po dokončení nebo zrušení hledání.`}
+      const footer=win.querySelector('#scanner-footer');if(footer)footer.hidden=true;
+      const subtitle=win.querySelector('header small');if(subtitle)subtitle.textContent=`Scanner běží · ${d.visited} systémů`;
+      for(const [name,disabled] of [['scan',true],['cancelScan',false],['exportScan',!d.rows.length]]){const b=win.querySelector('[data-explored="'+name+'"]');if(b)b.disabled=disabled}
+      return;
+    }
     // Preserve focus and partially typed search text during background batch updates.
+    const scannerScroll=win.querySelector('.scanner-controls')?.scrollTop||0,resourceScroll=win.querySelector('.scanner-resources')?.scrollTop||0;
     const active=win.querySelector('#explored-query'),focused=!!active&&state.root.activeElement===active,start=active?.selectionStart,end=active?.selectionEnd;
-    win.innerHTML=exploredMarkup();
+    win.classList?.toggle('minimized',state.exploredMinimized);win.innerHTML=exploredMarkup();
     win.querySelector('#explored-drag').addEventListener('pointerdown',e=>drag(e,win,'exploredPosition'));
+    if(win.querySelector('.scanner-controls'))win.querySelector('.scanner-controls').scrollTop=scannerScroll;if(win.querySelector('.scanner-resources'))win.querySelector('.scanner-resources').scrollTop=resourceScroll;
     win.querySelectorAll('[data-explored]').forEach(b=>b.addEventListener('click',()=>exploredAction(b.dataset.explored)));
+    if(state.exploredMinimized)return;
     const query=win.querySelector('#explored-query');query?.addEventListener('input',e=>{exploredSystems.state.query=e.target.value;exploredSystems.state.page=0;renderExplored()});
     win.querySelector('#explored-filter')?.addEventListener('change',e=>{exploredSystems.state.filter=e.target.value;exploredSystems.state.page=0;renderExplored()});
     for(const [id,key] of [['explored-sort','sort'],['explored-direction','direction']])win.querySelector('#'+id)?.addEventListener('change',e=>{exploredSystems.state[key]=e.target.value;exploredSystems.state.page=0;renderExplored()});
     win.querySelectorAll('[data-explored-sort]').forEach(b=>b.addEventListener('click',()=>{const d=exploredSystems.state,key=b.dataset.exploredSort;d.direction=d.sort===key&&d.direction==='desc'?'asc':'desc';d.sort=key;d.page=0;renderExplored()}));
     for(const [id,key] of [['expansion-radius','radius'],['expansion-wanted','wanted']])win.querySelector('#'+id)?.addEventListener('change',e=>{expansionAdvisor.invalidate();expansionAdvisor.state[key]=e.target.value;renderExplored()});bindExploredLinks(win);
+    win.querySelector('#scanner-origin-mode')?.addEventListener('change',e=>{galaxyScanner.invalidate();state.scannerOriginMode=e.target.value;renderExplored()});
+    for(const [id,key] of [['scanner-origin-id','scannerOriginId'],['scanner-x','scannerX'],['scanner-y','scannerY']])win.querySelector('#'+id)?.addEventListener('input',e=>{state[key]=e.target.value;invalidateScannerInput(win)});
+    win.querySelectorAll('[data-scanner-value]').forEach(input=>input.addEventListener(input.tagName==='SELECT'?'change':'input',e=>{galaxyScanner.state.config[input.dataset.scannerValue]=e.target.value;if(input.tagName==='SELECT')galaxyScanner.invalidate();else invalidateScannerInput(win)}));
+    win.querySelectorAll('[data-scanner-resource]').forEach(input=>input.addEventListener('change',()=>{const ids=new Set(galaxyScanner.state.config.resources);input.checked?ids.add(input.dataset.scannerResource):ids.delete(input.dataset.scannerResource);galaxyScanner.state.config.resources=[...ids];galaxyScanner.invalidate()}));
+    win.querySelector('#scanner-idle')?.addEventListener('change',e=>{galaxyScanner.state.config.onlyIdle=e.target.checked;galaxyScanner.invalidate()});
     if(focused){query.focus({preventScroll:true});if(start!==null&&start!==undefined)query.setSelectionRange?.(start,end)}
   }
+  function invalidateScannerInput(win){
+    galaxyScanner.invalidate(false);
+    for(const id of ['scanner-results','scanner-footer']){const el=win.querySelector('#'+id);if(el)el.hidden=true}
+    const status=win.querySelector('#scanner-status');if(status)status.textContent=galaxyScanner.state.notice;
+    for(const [name,disabled] of [['scan',state.writing],['cancelScan',true],['exportScan',true]]){const b=win.querySelector('[data-explored="'+name+'"]');if(b)b.disabled=disabled}
+  }
   async function exploredAction(name){
-    if(name==='tabList'||name==='tabExpansion'){state.exploredTab=name==='tabList'?'list':'expansion';renderExplored();return}
+    if(name==='minimize'){state.exploredMinimized=!state.exploredMinimized;save();renderExplored();return}
+    if(name==='scan'){if(!state.writing)await galaxyScanner.search({center:scannerCenter()});return}
+    if(name==='cancelScan'){galaxyScanner.cancel();return}
+    if(name==='scanPrev'||name==='scanNext'){galaxyScanner.state.page+=name==='scanPrev'?-1:1;renderExplored();return}
+    if(name==='exportScan'){download({version:'0.6.0',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
+    if(['tabList','tabExpansion','tabScanner'].includes(name)){state.exploredTab=name==='tabList'?'list':name==='tabScanner'?'scanner':'expansion';renderExplored();return}
     if(name==='searchExpansion'){if(!state.writing)await expansionAdvisor.search({originId:state.view?.station?.system||debugTools.currentSystemId()});return}
     if(name==='cancelExpansion'){expansionAdvisor.cancel();return}
-    if(name==='close'){state.exploredOpened=false;expansionAdvisor.cancel();exploredSystems.cancel();renderExplored();return}
+    if(name==='close'){state.exploredOpened=false;galaxyScanner.cancel();expansionAdvisor.cancel();exploredSystems.cancel();renderExplored();return}
     if(name==='cancel'){exploredSystems.cancel();return}
     if(name==='refresh'){if(!state.writing){expansionAdvisor.invalidate();await exploredSystems.refresh();}return}
-    if(name==='return'){const target=state.exploredTab==='expansion'?expansionAdvisor.state:exploredSystems.state;try{debugTools.returnCamera();target.error=''}catch(e){target.error=e.message}}
+    if(name==='return'){const target=state.exploredTab==='scanner'?galaxyScanner.state:state.exploredTab==='expansion'?expansionAdvisor.state:exploredSystems.state;try{debugTools.returnCamera();target.error=''}catch(e){target.error=e.message}}
     if(name==='prev')exploredSystems.state.page--;if(name==='next')exploredSystems.state.page++;renderExplored();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.5.3 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.6.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
@@ -1219,14 +1370,14 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
     const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['debug','Debug'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.5.3 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.6.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><button data-act="exploredOpen" title="Samostatné okno prozkoumaných systémů">Systémy</button><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
      <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
      <main>${({summary,resources,galaxy,production,proposals,account:accountMenu,advisor:advisorMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
      <footer>All Out of Space · ${state.processing?'Probíhá operace':'Připraveno'} <button data-act="exportPlan">Export návrhů</button></footer>`;
-    panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;expansionAdvisor.invalidate();state.view=null;state.plan=[];state.selected.clear();loadView()});
+    panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;expansionAdvisor.invalidate();galaxyScanner.invalidate();state.view=null;state.plan=[];state.selected.clear();loadView()});
     panel.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;render()}));
     panel.querySelectorAll('[data-act]').forEach(b=>b.addEventListener('click',()=>action(b.dataset.act)));
     panel.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('change',()=>{if(state.processing)return;b.checked?state.selected.add(b.dataset.plan):state.selected.delete(b.dataset.plan);render()}));
@@ -1262,7 +1413,7 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
     panel.querySelectorAll('[data-account]').forEach(b=>b.addEventListener('click',()=>accountAction(b.dataset.account)));
     panel.querySelectorAll('[data-account-open]').forEach(b=>b.addEventListener('click',()=>{
       if(state.processing||accountOverview.state.busy||progressAdvisor.state.busy)return;
-      state.stationId=b.dataset.accountOpen;expansionAdvisor.invalidate();state.view=null;state.plan=[];state.selected.clear();state.tab='summary';loadView();
+      state.stationId=b.dataset.accountOpen;expansionAdvisor.invalidate();galaxyScanner.invalidate();state.view=null;state.plan=[];state.selected.clear();state.tab='summary';loadView();
     }));
     panel.querySelector('#account-filter')?.addEventListener('input',e=>{
       accountOverview.state.query=e.target.value;const query=e.target.value.toLocaleLowerCase('cs-CZ');
@@ -1271,7 +1422,7 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
     panel.querySelector('#drag')?.addEventListener('pointerdown',drag);
   }
   async function action(name){
-    if(name==='exploredOpen'){state.exploredOpened=true;renderExplored();if(!exploredSystems.state.at&&!exploredSystems.state.busy&&!state.writing)await exploredSystems.refresh();return}
+    if(name==='exploredOpen'){state.exploredOpened=true;state.exploredMinimized=false;save();renderExplored();if(!exploredSystems.state.at&&!exploredSystems.state.busy&&!state.writing)await exploredSystems.refresh();return}
     if(name==='resetFab'){state.fabMover?.reset();return}
     if(state.processing && !['hide','exportPlan','diag'].includes(name))return;
     if(name==='hide'){state.opened=false;render();return}
@@ -1280,7 +1431,7 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
     if(name==='addRequest'||name==='addExport'){addDraft(name==='addRequest'?'request':'export',state.root?.getElementById('panel')?.querySelector('#draft-item')?.value);render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.5.3',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'0.6.0',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,priority:p.priority,group:p.existing?.group??p.group,risk:p.risk,error:p.error}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -1312,6 +1463,7 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
       #debug-system,#debug-planet,[id^="advisor-"],#account-filter{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
       #explored-window{pointer-events:auto;position:fixed;z-index:2;left:25px;top:100px;width:min(800px,calc(100vw - 16px));height:480px;min-width:min(320px,calc(100vw - 16px));min-height:min(260px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);resize:both;overflow:hidden;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #527d8f;border-radius:12px;font:12px/1.45 system-ui;box-shadow:0 15px 45px #000b}
       #explored-window[hidden]{display:none}#explored-window header button{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif}#explored-window .explored-body{flex:1;min-height:80px;overflow:auto;padding:10px}#explored-window .explored-tools{display:flex;flex-wrap:wrap;gap:6px;padding:8px}#explored-window label{display:flex;align-items:center;gap:5px}#explored-window input,#explored-window select{max-width:220px;background:#182e3b;color:#fff;border:1px solid #587080;padding:5px;border-radius:5px}#explored-window button[data-explored],#explored-window .system-link{background:#21586a;color:#e4faff;border:1px solid #3b91a0;border-radius:5px;padding:5px 7px}#explored-window .system-link{text-align:left;text-decoration:underline;background:transparent;border:0;color:#8bdcef;padding:0}#explored-window td small{display:block;color:#afc6d1}#explored-window .tabs button[data-explored]{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:#b5c8d5}#explored-window .tabs button.active{color:#fff;border-bottom-color:#61c2d7}#explored-window button[data-explored-sort]{background:transparent;border:0;color:#b5e6ed;font-weight:bold;padding:0}#explored-window .sect small{display:block;color:#a9c7d2;margin:5px 0}#explored-window header{flex-shrink:0}#explored-window footer{gap:5px}
+      #explored-window.minimized{height:auto!important;min-height:0;max-height:none;resize:none}#explored-window.minimized>:not(header){display:none!important}#explored-window header>div:first-child{min-width:0;overflow:hidden}#explored-window header b,#explored-window header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#explored-window .window-controls{display:flex;gap:5px;flex-shrink:0}.scanner-controls{max-height:45%;overflow:auto;flex-shrink:0}.scanner-resources{display:flex;flex-wrap:wrap;gap:6px;padding:8px;max-height:135px;overflow:auto;flex-shrink:0}.scanner-resources label{min-width:140px;font-size:11px}#explored-window [data-scanner-value]{max-width:190px}#explored-window input[type="number"]{width:110px}
       @media(max-width:670px){#panel{top:8px;left:8px!important;right:auto!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
     const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit · přesuň tažením';state.fabMover=makeMovableButton(fab,{getPosition:()=>state.fabPosition,setPosition:p=>{state.fabPosition=p},viewport:()=>({width:innerWidth,height:innerHeight}),save});fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
     const panel=document.createElement('section');panel.id='panel';panel.hidden=true;
@@ -1336,13 +1488,13 @@ function createExpansionAdvisor({api,catalog,loadRules,summarizeStructures,syste
         state.windowSize={width:Math.round(rect.width),height:Math.round(rect.height)};
         clearTimeout(resizeSave);resizeSave=setTimeout(save,250);
       }).observe(panel);
-      let exploredSave;new ResizeObserver(()=>{if(!explored.style.width||!explored.style.height||explored.hidden)return;const box=explored.getBoundingClientRect();state.exploredSize={width:Math.round(box.width),height:Math.round(box.height)};clearTimeout(exploredSave);exploredSave=setTimeout(save,250)}).observe(explored);
+      let exploredSave;new ResizeObserver(()=>{if(!explored.style.width||!explored.style.height||explored.hidden||state.exploredMinimized)return;const box=explored.getBoundingClientRect();state.exploredSize={width:Math.round(box.width),height:Math.round(box.height)};clearTimeout(exploredSave);exploredSave=setTimeout(save,250)}).observe(explored);
     }
   }
   document.addEventListener('spacefactory:auth',e=>{
     if(e.detail?.profile)return;
-    state.exploredOpened=false;expansionAdvisor.invalidate();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
+    state.exploredOpened=false;galaxyScanner.invalidate();expansionAdvisor.invalidate();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
   });
-  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{exploredSystems.stale();expansionAdvisor.invalidate()});
+  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{exploredSystems.stale();expansionAdvisor.invalidate();galaxyScanner.invalidate()});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 })();
