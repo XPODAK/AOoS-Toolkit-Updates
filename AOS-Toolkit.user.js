@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.2.2
-// @description  Smart Logistics profiles, confirmed API writes, galaxy resources, production and diagnostics (CZ)
+// @version      0.3.0
+// @description  Smart Logistics, Resource X-Ray, planet inspector, client camera tools and diagnostics (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
 // @updateURL    https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.meta.js
@@ -20,6 +20,122 @@
   window.__aosToolkitRunning = true;
   // GAME is embedded at build time. Does not fetch or send player data elsewhere.
   const GAME = {"version":"2026-10-25","items":{"iron-ore":{"n":"Iron Ore","c":"raw","t":1,"s":100},"copper-ore":{"n":"Copper Ore","c":"raw","t":1,"s":100},"carbon":{"n":"Carbon Rock","c":"raw","t":1,"s":100},"silicon":{"n":"Silicon Ore","c":"raw","t":1,"s":100},"aluminum-ore":{"n":"Aluminum Ore","c":"raw","t":1,"s":100},"hydrogen-ice":{"n":"Hydrogen Ice","c":"raw","t":1,"s":100},"oxygen-ice":{"n":"Oxygen Ice","c":"raw","t":1,"s":100},"nickel-ore":{"n":"Nickel Ore","c":"raw","t":2,"s":50},"titanium-ore":{"n":"Titanium Ore","c":"raw","t":2,"s":50},"magnesium-ore":{"n":"Magnesium Ore","c":"raw","t":2,"s":50},"chromium-ore":{"n":"Chromium Ore","c":"raw","t":2,"s":50},"tin-ore":{"n":"Tin Ore","c":"raw","t":2,"s":50},"zinc-ore":{"n":"Zinc Ore","c":"raw","t":2,"s":50},"lead-ore":{"n":"Lead Ore","c":"raw","t":2,"s":50},"sulfur":{"n":"Sulfur Deposit","c":"raw","t":2,"s":50},"nitrogen-ice":{"n":"Nitrogen Ice","c":"raw","t":2,"s":50},"phosphorus-ore":{"n":"Phosphorus Ore","c":"raw","t":2,"s":50},"cobalt-ore":{"n":"Cobalt Ore","c":"raw","t":3,"s":20},"lithium-ore":{"n":"Lithium Ore","c":"raw","t":3,"s":20},"silver-ore":{"n":"Silver Ore","c":"raw","t":3,"s":20},"gold":{"n":"Gold Ore","c":"raw","t":3,"s":20},"tungsten-ore":{"n":"Tungsten Ore","c":"raw","t":3,"s":20},"boron-ore":{"n":"Boron Ore","c":"raw","t":3,"s":20},"neodymium-ore":{"n":"Neodymium Ore","c":"raw","t":3,"s":20},"helium-gas":{"n":"Helium Gas","c":"raw","t":3,"s":20},"xenon-gas":{"n":"Xenon Gas","c":"raw","t":3,"s":20},"platinum":{"n":"Platinum Ore","c":"raw","t":4,"s":10},"palladium-ore":{"n":"Palladium Ore","c":"raw","t":4,"s":10},"iridium-ore":{"n":"Iridium Ore","c":"raw","t":4,"s":10},"uranium-ore":{"n":"Uranium Ore","c":"raw","t":4,"s":10},"thorium-ore":{"n":"Thorium Ore","c":"raw","t":4,"s":10},"helium-3":{"n":"Helium-3","c":"raw","t":4,"s":10},"iron-ingot":{"n":"Iron Ingot","c":"refined","t":1,"s":100},"copper-ingot":{"n":"Copper Ingot","c":"refined","t":1,"s":100},"nickel-ingot":{"n":"Nickel Ingot","c":"refined","t":2,"s":50},"tin-ingot":{"n":"Tin Ingot","c":"refined","t":2,"s":50},"zinc-ingot":{"n":"Zinc Ingot","c":"refined","t":2,"s":50},"lead-ingot":{"n":"Lead Ingot","c":"refined","t":2,"s":50},"cobalt-ingot":{"n":"Cobalt Ingot","c":"refined","t":3,"s":20},"silver-ingot":{"n":"Silver Ingot","c":"refined","t":3,"s":20},"gold-ingot":{"n":"Gold Ingot","c":"refined","t":3,"s":20},"refined-carbon":{"n":"Refined Carbon","c":"refined","t":1,"s":100},"glass":{"n":"Glass","c":"refined","t":1,"s":100},"solder":{"n":"Solder","c":"refined","t":2,"s":50},"bronze":{"n":"Bronze","c":"refined","t":2,"s":50},"brass":{"n":"Brass","c":"refined","t":2,"s":50},"lead-shielding":{"n":"Lead Shielding","c":"refined","t":2,"s":50},"steel":{"n":"Steel","c":"refined","t":1,"s":100},"graphite":{"n":"Graphite","c":"refined","t":1,"s":100},"pure-silicon":{"n":"Pure Silicon","c":"refined","t":1,"s":100},"borosilicate-glass":{"n":"Borosilicate Glass","c":"refined","t":3,"s":20},"aluminum-ingot":{"n":"Aluminum Ingot","c":"refined","t":1,"s":100},"magnesium-ingot":{"n":"Magnesium Ingot","c":"refined","t":2,"s":50},"magnesium-alloy":{"n":"Magnesium Alloy","c":"refined","t":2,"s":50},"titanium-ingot":{"n":"Titanium Ingot","c":"refined","t":2,"s":50},"chromium-ingot":{"n":"Chromium Ingot","c":"refined","t":2,"s":50},"lithium-metal":{"n":"Lithium Metal","c":"refined","t":3,"s":20},"neodymium-metal":{"n":"Neodymium Metal","c":"refined","t":3,"s":20},"tungsten-powder":{"n":"Tungsten Powder","c":"refined","t":3,"s":20},"stainless-steel":{"n":"Stainless Steel","c":"refined","t":2,"s":50},"superalloy":{"n":"Superalloy","c":"refined","t":3,"s":20},"titanium-alloy":{"n":"Titanium Alloy","c":"refined","t":2,"s":50},"tungsten-carbide":{"n":"Tungsten Carbide","c":"refined","t":3,"s":20},"engine-nozzle":{"n":"Engine Nozzle","c":"parts","t":3,"s":10},"neodymium-magnet":{"n":"Neodymium Magnet","c":"parts","t":3,"s":10},"platinum-ingot":{"n":"Platinum Ingot","c":"refined","t":4,"s":10},"palladium-ingot":{"n":"Palladium Ingot","c":"refined","t":4,"s":10},"iridium-ingot":{"n":"Iridium Ingot","c":"refined","t":4,"s":10},"iridium-crucible":{"n":"Iridium Crucible","c":"parts","t":4,"s":5},"iron-plate":{"n":"Iron Plate","c":"refined","t":1,"s":100},"copper-wire":{"n":"Copper Wire","c":"refined","t":1,"s":100},"sulfur-powder":{"n":"Sulfur Powder","c":"refined","t":2,"s":50},"phosphorus-powder":{"n":"Phosphorus Powder","c":"refined","t":2,"s":50},"copper-sheet":{"n":"Copper Sheet","c":"refined","t":1,"s":100},"copper-tubing":{"n":"Copper Tubing","c":"refined","t":1,"s":100},"aluminum-sheet":{"n":"Aluminum Sheet","c":"refined","t":1,"s":100},"aluminum-frame":{"n":"Aluminum Frame","c":"refined","t":1,"s":100},"titanium-plate":{"n":"Titanium Plate","c":"refined","t":2,"s":50},"gold-foil":{"n":"Gold Foil","c":"refined","t":3,"s":20},"diamond":{"n":"Diamond","c":"refined","t":1,"s":100},"hydrogen-filter":{"n":"Hydrogen Filter","c":"parts","t":4,"s":5},"water":{"n":"Water","c":"refined","t":1,"s":100},"polymer":{"n":"Polymer","c":"refined","t":1,"s":100},"sulfuric-acid":{"n":"Sulfuric Acid","c":"refined","t":2,"s":50},"rubber":{"n":"Rubber","c":"refined","t":2,"s":50},"silver-paste":{"n":"Silver Paste","c":"refined","t":3,"s":20},"nickel-plating":{"n":"Nickel Plating","c":"refined","t":2,"s":50},"chrome-plating":{"n":"Chrome Plating","c":"refined","t":2,"s":50},"galvanized-steel":{"n":"Galvanized Steel","c":"refined","t":2,"s":50},"gold-contacts":{"n":"Gold Contacts","c":"parts","t":3,"s":10},"mirror":{"n":"Mirror","c":"parts","t":3,"s":10},"ammonia":{"n":"Ammonia","c":"refined","t":2,"s":50},"fertilizer":{"n":"Fertilizer","c":"goods","t":2,"s":20},"mining-charge":{"n":"Mining Charge","c":"goods","t":2,"s":20},"boron-powder":{"n":"Boron Powder","c":"refined","t":3,"s":20},"battery-cathode":{"n":"Battery Cathode","c":"parts","t":3,"s":10},"catalyst-mesh":{"n":"Catalyst Mesh","c":"parts","t":4,"s":5},"uranium-oxide":{"n":"Uranium Oxide","c":"refined","t":4,"s":10},"thorium-oxide":{"n":"Thorium Oxide","c":"refined","t":4,"s":10},"liquid-hydrogen":{"n":"Liquid Hydrogen","c":"refined","t":1,"s":100},"liquid-oxygen":{"n":"Liquid Oxygen","c":"refined","t":1,"s":100},"liquid-nitrogen":{"n":"Liquid Nitrogen","c":"refined","t":2,"s":50},"hydrogen-gas":{"n":"Hydrogen Gas","c":"refined","t":1,"s":100},"oxygen-gas":{"n":"Oxygen Gas","c":"refined","t":1,"s":100},"nitrogen-gas":{"n":"Nitrogen Gas","c":"refined","t":2,"s":50},"breathable-air":{"n":"Breathable Air","c":"refined","t":2,"s":50},"rocket-fuel":{"n":"Rocket Fuel","c":"refined","t":1,"s":100},"helium-tank":{"n":"Helium Tank","c":"parts","t":3,"s":10},"xenon-tank":{"n":"Xenon Tank","c":"parts","t":3,"s":10},"liquid-helium":{"n":"Liquid Helium","c":"refined","t":3,"s":20},"hydrogen-storage-cell":{"n":"Hydrogen Storage Cell","c":"parts","t":4,"s":5},"silicon-wafer":{"n":"Silicon Wafer","c":"parts","t":1,"s":50},"deuterium":{"n":"Deuterium","c":"refined","t":1,"s":100},"enriched-uranium":{"n":"Enriched Uranium","c":"refined","t":4,"s":10},"uranium-233":{"n":"Uranium-233","c":"refined","t":4,"s":10},"fusion-fuel-pellet":{"n":"Fusion Fuel Pellet","c":"refined","t":4,"s":10},"flare":{"n":"Flare","c":"goods","t":2,"s":20},"igniter":{"n":"Igniter","c":"parts","t":2,"s":20},"lead-acid-battery":{"n":"Lead-Acid Battery","c":"parts","t":2,"s":20},"lithium-battery":{"n":"Lithium Battery","c":"parts","t":3,"s":10},"electric-motor":{"n":"Electric Motor","c":"parts","t":3,"s":10},"xenon-lamp":{"n":"Xenon Lamp","c":"goods","t":3,"s":10},"fuel-cell":{"n":"Fuel Cell","c":"parts","t":4,"s":5},"ion-thruster":{"n":"Ion Thruster","c":"parts","t":3,"s":10},"neutron-detector":{"n":"Neutron Detector","c":"parts","t":4,"s":5},"control-rod":{"n":"Control Rod","c":"parts","t":3,"s":10},"fission-fuel-rod":{"n":"Fission Fuel Rod","c":"parts","t":4,"s":5},"thorium-fuel-rod":{"n":"Thorium Fuel Rod","c":"parts","t":4,"s":5},"fur-2":{"n":"Tier 2 Furnace","c":"buildings","t":2,"s":5},"fur-3":{"n":"Tier 3 Furnace","c":"buildings","t":3,"s":2},"prs-2":{"n":"Tier 2 Press","c":"buildings","t":2,"s":5},"prs-3":{"n":"Tier 3 Press","c":"buildings","t":3,"s":2},"chem-2":{"n":"Tier 2 Chemical Plant","c":"buildings","t":2,"s":5},"chem-3":{"n":"Tier 3 Chemical Plant","c":"buildings","t":3,"s":2},"cryo-2":{"n":"Tier 2 Cryo Plant","c":"buildings","t":2,"s":5},"cryo-3":{"n":"Tier 3 Cryo Plant","c":"buildings","t":3,"s":2},"ref-2":{"n":"Tier 2 Refinery","c":"buildings","t":2,"s":5},"ref-3":{"n":"Tier 3 Refinery","c":"buildings","t":3,"s":2},"asm-2":{"n":"Tier 2 Assembler","c":"buildings","t":2,"s":5},"asm-3":{"n":"Tier 3 Assembler","c":"buildings","t":3,"s":2},"assembler-2":{"n":"Tier 2 Assembly Bay","c":"buildings","t":2,"s":5},"assembler-3":{"n":"Tier 3 Assembly Bay","c":"buildings","t":3,"s":2},"miner-2":{"n":"Tier 2 Miner","c":"buildings","t":2,"s":5},"miner-3":{"n":"Tier 3 Miner","c":"buildings","t":3,"s":2},"fur-1":{"n":"Tier 1 Furnace","c":"buildings","t":1,"s":10},"prs-1":{"n":"Tier 1 Press","c":"buildings","t":1,"s":10},"chem-1":{"n":"Tier 1 Chemical Plant","c":"buildings","t":1,"s":10},"cryo-1":{"n":"Tier 1 Cryo Plant","c":"buildings","t":1,"s":10},"ref-1":{"n":"Tier 1 Refinery","c":"buildings","t":1,"s":10},"asm-1":{"n":"Tier 1 Assembler","c":"buildings","t":1,"s":10},"miner-1":{"n":"Tier 1 Miner","c":"buildings","t":1,"s":10},"station-1":{"n":"Tier 1 Space Station","c":"buildings","t":1,"s":10},"scout-1":{"n":"Tier 1 Scout Ship","c":"ships","t":1,"s":1}},"recipes":{"iron-ingot":{"o":"iron-ingot","m":1,"i":{"iron-ore":2}},"copper-ingot":{"o":"copper-ingot","m":1,"i":{"copper-ore":2}},"nickel-ingot":{"o":"nickel-ingot","m":1,"i":{"nickel-ore":2}},"tin-ingot":{"o":"tin-ingot","m":1,"i":{"tin-ore":2}},"zinc-ingot":{"o":"zinc-ingot","m":1,"i":{"zinc-ore":2}},"lead-ingot":{"o":"lead-ingot","m":1,"i":{"lead-ore":2}},"cobalt-ingot":{"o":"cobalt-ingot","m":1,"i":{"cobalt-ore":2}},"silver-ingot":{"o":"silver-ingot","m":1,"i":{"silver-ore":2}},"gold-ingot":{"o":"gold-ingot","m":1,"i":{"gold":2}},"refined-carbon":{"o":"refined-carbon","m":1,"i":{"carbon":2}},"glass":{"o":"glass","m":1,"i":{"silicon":2}},"solder":{"o":"solder","m":1,"i":{"tin-ingot":2,"copper-ingot":1}},"bronze":{"o":"bronze","m":1,"i":{"copper-ingot":3,"tin-ingot":1}},"brass":{"o":"brass","m":1,"i":{"copper-ingot":2,"zinc-ingot":1}},"lead-shielding":{"o":"lead-shielding","m":1,"i":{"lead-ingot":4}},"steel":{"o":"steel","m":1,"i":{"iron-ingot":2,"refined-carbon":1}},"graphite":{"o":"graphite","m":1,"i":{"refined-carbon":3}},"pure-silicon":{"o":"pure-silicon","m":1,"i":{"silicon":2,"refined-carbon":1}},"borosilicate-glass":{"o":"borosilicate-glass","m":1,"i":{"silicon":2,"boron-powder":1}},"aluminum-ingot":{"o":"aluminum-ingot","m":1,"i":{"aluminum-ore":2}},"magnesium-ingot":{"o":"magnesium-ingot","m":1,"i":{"magnesium-ore":2}},"magnesium-alloy":{"o":"magnesium-alloy","m":1,"i":{"magnesium-ingot":2,"aluminum-ingot":1}},"titanium-ingot":{"o":"titanium-ingot","m":1,"i":{"titanium-ore":2,"magnesium-ingot":1}},"chromium-ingot":{"o":"chromium-ingot","m":1,"i":{"chromium-ore":2,"refined-carbon":1}},"lithium-metal":{"o":"lithium-metal","m":1,"i":{"lithium-ore":2}},"neodymium-metal":{"o":"neodymium-metal","m":1,"i":{"neodymium-ore":2}},"tungsten-powder":{"o":"tungsten-powder","m":1,"i":{"tungsten-ore":2,"hydrogen-gas":2}},"stainless-steel":{"o":"stainless-steel","m":1,"i":{"steel":3,"chromium-ingot":1,"nickel-ingot":1}},"superalloy":{"o":"superalloy","m":1,"i":{"nickel-ingot":3,"cobalt-ingot":1,"chromium-ingot":1}},"titanium-alloy":{"o":"titanium-alloy","m":1,"i":{"titanium-ingot":3,"aluminum-ingot":1}},"tungsten-carbide":{"o":"tungsten-carbide","m":1,"i":{"tungsten-powder":1,"refined-carbon":1}},"engine-nozzle":{"o":"engine-nozzle","m":1,"i":{"tungsten-powder":4}},"neodymium-magnet":{"o":"neodymium-magnet","m":1,"i":{"iron-ingot":2,"neodymium-metal":1,"boron-powder":1}},"platinum-ingot":{"o":"platinum-ingot","m":1,"i":{"platinum":2}},"palladium-ingot":{"o":"palladium-ingot","m":1,"i":{"palladium-ore":2}},"iridium-ingot":{"o":"iridium-ingot","m":1,"i":{"iridium-ore":2}},"iridium-crucible":{"o":"iridium-crucible","m":1,"i":{"iridium-ingot":3}},"iron-plate":{"o":"iron-plate","m":1,"i":{"iron-ingot":2}},"copper-wire":{"o":"copper-wire","m":1,"i":{"copper-ingot":1}},"sulfur-powder":{"o":"sulfur-powder","m":1,"i":{"sulfur":1}},"phosphorus-powder":{"o":"phosphorus-powder","m":1,"i":{"phosphorus-ore":1}},"copper-sheet":{"o":"copper-sheet","m":1,"i":{"copper-ingot":2}},"copper-tubing":{"o":"copper-tubing","m":1,"i":{"copper-ingot":3}},"aluminum-sheet":{"o":"aluminum-sheet","m":1,"i":{"aluminum-ingot":2}},"aluminum-frame":{"o":"aluminum-frame","m":1,"i":{"aluminum-ingot":3}},"titanium-plate":{"o":"titanium-plate","m":1,"i":{"titanium-ingot":2}},"gold-foil":{"o":"gold-foil","m":1,"i":{"gold-ingot":1}},"diamond":{"o":"diamond","m":1,"i":{"graphite":5}},"hydrogen-filter":{"o":"hydrogen-filter","m":1,"i":{"palladium-ingot":2}},"water":{"o":"water","m":1,"i":{"hydrogen-gas":2,"oxygen-gas":1}},"polymer":{"o":"polymer","m":1,"i":{"refined-carbon":1,"hydrogen-gas":2}},"sulfuric-acid":{"o":"sulfuric-acid","m":1,"i":{"sulfur-powder":1,"oxygen-gas":2,"water":1}},"rubber":{"o":"rubber","m":1,"i":{"polymer":2,"sulfur-powder":1}},"silver-paste":{"o":"silver-paste","m":1,"i":{"silver-ingot":1,"polymer":1}},"nickel-plating":{"o":"nickel-plating","m":1,"i":{"steel":1,"nickel-ingot":1,"sulfuric-acid":1}},"chrome-plating":{"o":"chrome-plating","m":1,"i":{"steel":1,"chromium-ingot":1,"sulfuric-acid":1}},"galvanized-steel":{"o":"galvanized-steel","m":1,"i":{"steel":2,"zinc-ingot":1}},"gold-contacts":{"o":"gold-contacts","m":1,"i":{"copper-sheet":1,"gold-ingot":1}},"mirror":{"o":"mirror","m":1,"i":{"glass":1,"silver-ingot":1}},"ammonia":{"o":"ammonia","m":1,"i":{"nitrogen-gas":1,"hydrogen-gas":3}},"fertilizer":{"o":"fertilizer","m":1,"i":{"ammonia":2,"phosphorus-powder":1}},"mining-charge":{"o":"mining-charge","m":1,"i":{"ammonia":2,"sulfur-powder":1,"refined-carbon":1}},"boron-powder":{"o":"boron-powder","m":1,"i":{"boron-ore":2,"sulfuric-acid":1}},"battery-cathode":{"o":"battery-cathode","m":1,"i":{"lithium-metal":1,"cobalt-ingot":1,"oxygen-gas":2}},"catalyst-mesh":{"o":"catalyst-mesh","m":1,"i":{"stainless-steel":1,"platinum-ingot":1}},"uranium-oxide":{"o":"uranium-oxide","m":1,"i":{"uranium-ore":3,"sulfuric-acid":1}},"thorium-oxide":{"o":"thorium-oxide","m":1,"i":{"thorium-ore":3,"sulfuric-acid":1}},"liquid-hydrogen":{"o":"liquid-hydrogen","m":1,"i":{"hydrogen-ice":1}},"liquid-oxygen":{"o":"liquid-oxygen","m":1,"i":{"oxygen-ice":1}},"liquid-nitrogen":{"o":"liquid-nitrogen","m":1,"i":{"nitrogen-ice":1}},"hydrogen-gas":{"o":"hydrogen-gas","m":1,"i":{"liquid-hydrogen":1}},"oxygen-gas":{"o":"oxygen-gas","m":1,"i":{"liquid-oxygen":1}},"nitrogen-gas":{"o":"nitrogen-gas","m":1,"i":{"liquid-nitrogen":1}},"breathable-air":{"o":"breathable-air","m":1,"i":{"oxygen-gas":1,"nitrogen-gas":4}},"rocket-fuel":{"o":"rocket-fuel","m":1,"i":{"liquid-hydrogen":2,"liquid-oxygen":1}},"helium-tank":{"o":"helium-tank","m":1,"i":{"steel":1,"helium-gas":5}},"xenon-tank":{"o":"xenon-tank","m":1,"i":{"titanium-plate":1,"xenon-gas":5}},"liquid-helium":{"o":"liquid-helium","m":1,"i":{"helium-gas":3}},"hydrogen-storage-cell":{"o":"hydrogen-storage-cell","m":1,"i":{"palladium-ingot":1,"hydrogen-gas":4}},"silicon-wafer":{"o":"silicon-wafer","m":1,"i":{"pure-silicon":2}},"deuterium":{"o":"deuterium","m":1,"i":{"hydrogen-gas":10}},"enriched-uranium":{"o":"enriched-uranium","m":1,"i":{"uranium-oxide":5}},"uranium-233":{"o":"uranium-233","m":1,"i":{"thorium-fuel-rod":1}},"fusion-fuel-pellet":{"o":"fusion-fuel-pellet","m":1,"i":{"helium-3":1,"deuterium":1}},"flare":{"o":"flare","m":1,"i":{"magnesium-ingot":1,"iron-plate":1}},"igniter":{"o":"igniter","m":1,"i":{"copper-wire":1,"phosphorus-powder":1}},"lead-acid-battery":{"o":"lead-acid-battery","m":1,"i":{"lead-ingot":2,"sulfuric-acid":1,"polymer":1}},"lithium-battery":{"o":"lithium-battery","m":1,"i":{"battery-cathode":1,"graphite":1,"copper-sheet":1,"aluminum-sheet":1}},"electric-motor":{"o":"electric-motor","m":1,"i":{"neodymium-magnet":2,"copper-wire":4,"steel":2,"iron-plate":1}},"xenon-lamp":{"o":"xenon-lamp","m":1,"i":{"glass":1,"xenon-gas":1,"tungsten-powder":1,"copper-wire":1}},"fuel-cell":{"o":"fuel-cell","m":1,"i":{"catalyst-mesh":1,"polymer":2,"hydrogen-gas":2,"graphite":1}},"ion-thruster":{"o":"ion-thruster","m":1,"i":{"xenon-tank":1,"graphite":2,"copper-wire":4}},"neutron-detector":{"o":"neutron-detector","m":1,"i":{"helium-3":1,"steel":1,"copper-wire":2}},"control-rod":{"o":"control-rod","m":1,"i":{"boron-powder":2,"steel":1}},"fission-fuel-rod":{"o":"fission-fuel-rod","m":1,"i":{"enriched-uranium":2,"steel":1}},"thorium-fuel-rod":{"o":"thorium-fuel-rod","m":1,"i":{"thorium-oxide":2,"enriched-uranium":1,"steel":1}},"fur-2":{"o":"fur-2","m":1,"i":{"iron-plate":40,"copper-ingot":30,"refined-carbon":30,"glass":20,"copper-wire":20}},"fur-3":{"o":"fur-3","m":1,"i":{"titanium-plate":120,"galvanized-steel":100,"chrome-plating":80,"bronze":80,"lead-shielding":60,"nickel-plating":40,"solder":40}},"prs-2":{"o":"prs-2","m":1,"i":{"iron-plate":50,"iron-ingot":30,"copper-wire":25,"refined-carbon":15,"polymer":10}},"prs-3":{"o":"prs-3","m":1,"i":{"titanium-plate":140,"galvanized-steel":100,"magnesium-alloy":80,"brass":60,"rubber":50,"solder":40,"lead-acid-battery":20}},"chem-2":{"o":"chem-2","m":1,"i":{"iron-plate":35,"glass":30,"polymer":20,"copper-wire":20,"water":15,"oxygen-gas":10}},"chem-3":{"o":"chem-3","m":1,"i":{"chrome-plating":100,"nickel-plating":80,"rubber":80,"galvanized-steel":60,"sulfuric-acid":60,"brass":50,"lead-acid-battery":20}},"cryo-2":{"o":"cryo-2","m":1,"i":{"iron-plate":35,"copper-ingot":25,"glass":20,"polymer":15,"liquid-hydrogen":15,"liquid-oxygen":10}},"cryo-3":{"o":"cryo-3","m":1,"i":{"titanium-plate":100,"magnesium-alloy":80,"nickel-plating":80,"rubber":60,"liquid-nitrogen":60,"breathable-air":40,"lead-acid-battery":20}},"ref-2":{"o":"ref-2","m":1,"i":{"iron-plate":40,"glass":25,"copper-wire":25,"refined-carbon":20,"polymer":15,"hydrogen-gas":10}},"ref-3":{"o":"ref-3","m":1,"i":{"lead-shielding":120,"chrome-plating":80,"titanium-plate":80,"nickel-plating":60,"sulfuric-acid":50,"rubber":50,"lead-acid-battery":30}},"asm-2":{"o":"asm-2","m":1,"i":{"iron-plate":50,"copper-wire":40,"iron-ingot":20,"glass":15,"polymer":15}},"asm-3":{"o":"asm-3","m":1,"i":{"titanium-plate":120,"galvanized-steel":80,"magnesium-alloy":60,"solder":60,"brass":50,"rubber":50,"igniter":30,"lead-acid-battery":30}},"assembler-2":{"o":"assembler-2","m":1,"i":{"iron-plate":150,"copper-wire":100,"glass":80,"iron-ingot":80,"polymer":60,"refined-carbon":40}},"assembler-3":{"o":"assembler-3","m":1,"i":{"titanium-plate":400,"galvanized-steel":300,"magnesium-alloy":200,"chrome-plating":200,"bronze":150,"rubber":150,"solder":100,"lead-acid-battery":80}},"miner-2":{"o":"miner-2","m":1,"i":{"iron-plate":40,"copper-wire":25,"iron-ingot":20,"refined-carbon":15,"polymer":10}},"miner-3":{"o":"miner-3","m":1,"i":{"titanium-plate":100,"galvanized-steel":80,"chrome-plating":60,"mining-charge":60,"bronze":40,"rubber":40,"lead-acid-battery":20}},"fur-1":{"o":"fur-1","m":1,"i":{"silicon":10,"iron-ore":5}},"prs-1":{"o":"prs-1","m":1,"i":{"iron-ingot":15,"copper-ingot":5}},"chem-1":{"o":"chem-1","m":1,"i":{"iron-plate":15,"glass":10,"copper-wire":5}},"cryo-1":{"o":"cryo-1","m":1,"i":{"iron-plate":15,"copper-ingot":10,"glass":5}},"ref-1":{"o":"ref-1","m":1,"i":{"iron-plate":15,"glass":10,"copper-wire":10,"refined-carbon":5}},"asm-1":{"o":"asm-1","m":1,"i":{"iron-plate":15,"copper-wire":10}},"miner-1":{"o":"miner-1","m":1,"i":{"iron-ore":10,"copper-ore":5}},"station-1":{"o":"station-1","m":1,"i":{"iron-plate":30,"copper-wire":15,"glass":10}}},"buildings":{"miner-1":{"n":"Miner","k":"miner","s":null},"miner-2":{"n":"Miner","k":"miner","s":null},"miner-3":{"n":"Miner","k":"miner","s":null},"station-1":{"n":"Space Station","k":"station","s":20},"assembler-1":{"n":"Assembly Bay","k":"assembler","s":null},"assembler-2":{"n":"Assembly Bay","k":"assembler","s":null},"assembler-3":{"n":"Assembly Bay","k":"assembler","s":null},"lab-1":{"n":"Science Lab","k":"lab","s":null},"construct-1":{"n":"Building Crafter","k":"construct","s":null},"shipyard-1":{"n":"Ship Bay","k":"shipyard","s":null},"ops-1":{"n":"Operations Room","k":"ops","s":null},"contracts-1":{"n":"Contracts Office","k":"contracts","s":null}},"research":{"assembly-bay":{"i":{"iron-ore":1,"copper-ore":1}},"assembler":{"i":{"iron-ingot":1,"copper-ingot":1}},"floor-20":{"i":{"iron-plate":2,"iron-ingot":2}},"floor-75":{"i":{"titanium-plate":4,"galvanized-steel":4,"magnesium-alloy":2,"rubber":2}},"floor-250":{"i":{"superalloy":5,"tungsten-carbide":5,"neodymium-magnet":4,"borosilicate-glass":5,"lithium-battery":3,"gold-contacts":3}},"station-slots":{"i":{"iron-plate":2,"copper-wire":2,"glass":1}},"ship-bay":{"i":{"iron-plate":2,"copper-wire":1,"glass":1}},"tier-2-buildings":{"i":{}},"tier-3-buildings":{"i":{}},"auto-requests":{"i":{}}},"constructs":{"miner-1":{"i":{"iron-ore":10,"copper-ore":5}},"miner-2":{"i":{"iron-plate":40,"copper-wire":25,"iron-ingot":20,"refined-carbon":15,"polymer":10}},"miner-3":{"i":{"titanium-plate":100,"galvanized-steel":80,"chrome-plating":60,"mining-charge":60,"bronze":40,"rubber":40,"lead-acid-battery":20}},"station-1":{"i":{"iron-plate":30,"copper-wire":15,"glass":10}},"assembler-2":{"i":{"iron-plate":150,"copper-wire":100,"glass":80,"iron-ingot":80,"polymer":60,"refined-carbon":40}},"assembler-3":{"i":{"titanium-plate":400,"galvanized-steel":300,"magnesium-alloy":200,"chrome-plating":200,"bronze":150,"rubber":150,"solder":100,"lead-acid-battery":80}},"fur-1":{"i":{"silicon":10,"iron-ore":5}},"fur-2":{"i":{"iron-plate":40,"copper-ingot":30,"refined-carbon":30,"glass":20,"copper-wire":20}},"fur-3":{"i":{"titanium-plate":120,"galvanized-steel":100,"chrome-plating":80,"bronze":80,"lead-shielding":60,"nickel-plating":40,"solder":40}},"prs-1":{"i":{"iron-ingot":15,"copper-ingot":5}},"prs-2":{"i":{"iron-plate":50,"iron-ingot":30,"copper-wire":25,"refined-carbon":15,"polymer":10}},"prs-3":{"i":{"titanium-plate":140,"galvanized-steel":100,"magnesium-alloy":80,"brass":60,"rubber":50,"solder":40,"lead-acid-battery":20}},"chem-1":{"i":{"iron-plate":15,"glass":10,"copper-wire":5}},"chem-2":{"i":{"iron-plate":35,"glass":30,"polymer":20,"copper-wire":20,"water":15,"oxygen-gas":10}},"chem-3":{"i":{"chrome-plating":100,"nickel-plating":80,"rubber":80,"galvanized-steel":60,"sulfuric-acid":60,"brass":50,"lead-acid-battery":20}},"cryo-1":{"i":{"iron-plate":15,"copper-ingot":10,"glass":5}},"cryo-2":{"i":{"iron-plate":35,"copper-ingot":25,"glass":20,"polymer":15,"liquid-hydrogen":15,"liquid-oxygen":10}},"cryo-3":{"i":{"titanium-plate":100,"magnesium-alloy":80,"nickel-plating":80,"rubber":60,"liquid-nitrogen":60,"breathable-air":40,"lead-acid-battery":20}},"ref-1":{"i":{"iron-plate":15,"glass":10,"copper-wire":10,"refined-carbon":5}},"ref-2":{"i":{"iron-plate":40,"glass":25,"copper-wire":25,"refined-carbon":20,"polymer":15,"hydrogen-gas":10}},"ref-3":{"i":{"lead-shielding":120,"chrome-plating":80,"titanium-plate":80,"nickel-plating":60,"sulfuric-acid":50,"rubber":50,"lead-acid-battery":30}},"asm-1":{"i":{"iron-plate":15,"copper-wire":10}},"asm-2":{"i":{"iron-plate":50,"copper-wire":40,"iron-ingot":20,"glass":15,"polymer":15}},"asm-3":{"i":{"titanium-plate":120,"galvanized-steel":80,"magnesium-alloy":60,"solder":60,"brass":50,"rubber":50,"igniter":30,"lead-acid-battery":30}}}};
+// Client-only tools. Imports, rendering and game access are injected for offline tests.
+function createDebugTools({catalog,api,getGame,loadWorld,doc,onChange=()=>{},
+  timers={set:(fn,ms)=>setInterval(fn,ms),clear:id=>clearInterval(id)}}){
+  const state={input:'',busy:false,error:'',snapshot:null,letter:'',xray:false,notice:'Pouze klientské zobrazení a kamera.'};
+  let system=null,serial=0,overlay=null,timer=null,previousCamera=null;
+  const emit=()=>onChange();
+  const finite=value=>typeof value==='number'&&Number.isFinite(value);
+  function validateCamera(v){
+    if(!v||!finite(v.x)||!finite(v.y)||!finite(v.scale)||v.scale<=0)throw Error('Neplatné souřadnice kamery');
+    return {x:v.x,y:v.y,scale:v.scale};
+  }
+  function gameCamera(){
+    const game=getGame();
+    if(!game?.starmap||typeof game.starmap.goTo!=='function'||typeof game.starmap.view!=='function'||typeof game.setMapOpen!=='function')throw Error('Rozhraní kamery není dostupné; otevři mapu ve hře.');
+    if(game.stationView?.isOpen)throw Error('Nejprve opusť vnitřek stanice a otevři mapu.');
+    if(game.starmap.flying)throw Error('Počkej na dokončení aktuálního letu kamery.');
+    return game;
+  }
+  function rememberCamera(game){if(!previousCamera)previousCamera=validateCamera(game.starmap.view())}
+  async function inspect(id){
+    if(state.busy)return null;
+    const text=String(id??'').trim();state.input=text;state.error='';state.busy=true;state.snapshot=null;system=null;
+    setXray(false);const ticket=++serial;emit();
+    try{
+      if(!/^-?\d{1,10}\.-?\d{1,10}\.\d{1,3}$/.test(text))throw Error('Zadej přesné ID systému ve tvaru sx.sy.cell.');
+      const meta=await api('/api/map/meta');
+      if(!['number','string'].includes(typeof meta.seed)||String(meta.seed).trim()===''||!Number.isSafeInteger(Number(meta.seed)))throw Error('Chybí platný aktuální seed');
+      const seed=Number(meta.seed),{map,world,deposits}=await loadWorld();
+      const found=map.systemById(seed,text);if(!found||!finite(found.x)||!finite(found.y))throw Error('Systém podle aktuálního seedu neexistuje.');
+      const generated=world.generateSystem(seed,found);
+      if(!Array.isArray(generated?.bodies))throw Error('Neznámý formát generátoru systému');
+      const planets=generated.bodies.filter(b=>b?.letter).map(b=>{
+        if(!Array.isArray(b.deposits)||b.deposits.some(id=>typeof id!=='string'||catalog.items[id]?.c!=='raw'))throw Error('Generátor obsahuje neznámé ložisko.');
+        const richness=world.richnessOf(b);if(!finite(richness))throw Error('Neplatná bohatost planety');
+        const resources=b.deposits.map(id=>{
+          const initialUnits=deposits.depositSize(id,richness);if(!finite(initialUnits)||initialUnits<0)throw Error('Neplatná velikost ložiska');
+          return {id,name:catalog.items[id].n,tier:catalog.items[id].t,initialUnits};
+        });
+        const number=k=>finite(b[k])?b[k]:null;
+        return {letter:b.letter,name:b.name,kind:b.kind,richness,orbitAU:number('a'),radiusEarth:number('radius'),
+          periodYears:number('period'),temperatureK:number('temperature'),moons:number('moons'),habitable:b.habitable===true,rings:b.rings===true,resources};
+      });
+      if(ticket!==serial)return null;
+      system=found;state.snapshot={format:1,source:'deterministic-generation',liveStateVerified:false,seed,
+        system:{id:found.id,name:found.name,x:found.x,y:found.y,sx:found.sx,sy:found.sy,cell:found.cell,tier:found.tier},planets};
+      state.letter=planets[0]?.letter||'';state.notice='Generovaná data načtena. Vyčerpání a vlastnictví nejsou ověřené.';
+      return state.snapshot;
+    }catch(e){state.error=String(e.message||e);return null}
+    finally{if(ticket===serial){state.busy=false;emit()}}
+  }
+  function currentSystemId(){const game=getGame();return game?.sysview?.current?.id||game?.starmap?.selected?.id||''}
+  function cameraToSystem(){
+    if(!system)throw Error('Nejprve načti systém v inspektoru.');
+    const game=gameCamera();
+    if(typeof game.sysview?.frameOf!=='function'||typeof game.sysview?.focusOn!=='function'||typeof game.starmap.select!=='function')throw Error('Rozhraní zobrazení systému není dostupné.');
+    const target=validateCamera(game.sysview.frameOf(system));rememberCamera(game);
+    game.setMapOpen(true);game.starmap.select(system);game.sysview.focusOn(system);game.starmap.goTo(target.x,target.y,target.scale);
+    state.notice='Kamera přesunuta na systém; herní objekty se nepřesouvají.';emit();
+  }
+  function screenPlanet(game,planet){
+    const points=game?.sysview?.onScreen;
+    if(!Array.isArray(points))return null;
+    const matches=points.filter(p=>p.name===planet.name&&finite(p.x)&&finite(p.y));
+    return matches.length===1?matches[0]:null;
+  }
+  function cameraToPlanet(letter){
+    const planet=state.snapshot?.planets.find(p=>p.letter===letter);if(!planet)throw Error('Vyber existující planetu.');
+    const game=gameCamera();
+    if(game.sysview?.current?.id!==state.snapshot.system.id)throw Error('Nejprve přesuň kameru na načtený systém.');
+    const point=screenPlanet(game,planet);
+    if(!point||typeof game.starmap.worldOf!=='function'||typeof game.sysview.selectPlanet!=='function')throw Error('Planeta není jednoznačně vykreslená. Zobraz celý systém; přejmenované planety nemusí být rozpoznány.');
+    const world=game.starmap.worldOf(point.x,point.y),target=validateCamera({...world,scale:game.starmap.view().scale});rememberCamera(game);
+    game.setMapOpen(true);game.sysview.selectPlanet(letter);game.starmap.goTo(target.x,target.y,target.scale);
+    state.notice='Kamera vystředěna na planetu.';emit();
+  }
+  function returnCamera(){
+    if(!previousCamera)throw Error('Není uložená předchozí poloha kamery.');
+    const game=gameCamera(),target=validateCamera(previousCamera);game.setMapOpen(true);
+    game.starmap.goTo(target.x,target.y,target.scale);previousCamera=null;state.notice='Předchozí poloha kamery obnovena.';emit();
+  }
+  function label(text,style={}){
+    const el=doc.createElement('div');el.textContent=text;
+    Object.assign(el.style,{position:'fixed',background:'#091b28ed',color:'#d1fbff',border:'1px solid #47bbc7',borderRadius:'5px',padding:'4px 7px',font:'11px/1.35 system-ui',maxWidth:'250px',whiteSpace:'pre-line',pointerEvents:'none'},style);
+    return el;
+  }
+  function paintXray(){
+    if(!overlay||!state.xray)return;
+    overlay.replaceChildren();if(doc.hidden)return;
+    const game=getGame(),snapshot=state.snapshot;
+    // Hide stale labels on system changes and when a station covers the map.
+    if(!snapshot||game?.sysview?.current?.id!==snapshot.system.id||game?.stationView?.isOpen)return;
+    const canvas=doc.getElementById('sysview-canvas');if(!canvas||(canvas.checkVisibility&&!canvas.checkVisibility()))return;
+    const rect=canvas.getBoundingClientRect();if(!(rect.width>0&&rect.height>0))return;
+    overlay.appendChild(label('Resource X-Ray · generovaná ložiska\nAktuální vyčerpání ani vlastnictví nejsou ověřené.',{left:'12px',top:'80px'}));
+    for(const planet of snapshot.planets){
+      const p=screenPlanet(game,planet);if(!p||p.x<0||p.y<0||p.x>rect.width||p.y>rect.height)continue;
+      const x=rect.left+p.x,y=rect.top+p.y;
+      overlay.appendChild(label(planet.letter+' · '+planet.resources.map(r=>r.name+' T'+r.tier).join(', '),
+        {left:Math.max(rect.left,Math.min(rect.right-200,x+numRadius(p.r)+6))+'px',top:Math.max(rect.top,Math.min(rect.bottom-55,y))+'px'}));
+    }
+  }
+  function numRadius(r){return finite(r)?Math.max(0,r):0}
+  function setXray(enabled){
+    if(!enabled){if(timer!==null)timers.clear(timer);timer=null;overlay?.remove();overlay=null;state.xray=false;emit();return}
+    if(!state.snapshot)throw Error('Nejprve načti systém v inspektoru.');
+    if(state.xray)return;
+    overlay=doc.createElement('div');overlay.setAttribute('data-aos-xray','');
+    Object.assign(overlay.style,{position:'fixed',inset:'0',pointerEvents:'none',zIndex:'2147483644'});
+    doc.body.appendChild(overlay);state.xray=true;
+    const tick=()=>{try{paintXray()}catch(e){setXray(false);state.error='X-Ray zastaven: '+String(e.message||e);emit()}};
+    tick();if(state.xray)timer=timers.set(tick,150);emit();
+  }
+  function dispose(){serial++;state.busy=false;setXray(false);state.snapshot=null;system=null;previousCamera=null}
+  return {state,inspect,currentSystemId,cameraToSystem,cameraToPlanet,returnCamera,setXray,paintXray,dispose,
+    get canReturn(){return previousCamera!==null}};
+}
   const STORE = 'aos-toolkit.v0.2';
   const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') } catch { return {} } })();
@@ -32,6 +148,8 @@
     error:'', notice:'Připraveno', processing:false, selected:new Set(), host:null, root:null, position:saved?.position||old?.position,
     audit:[], serverLog:[], querySerial:0, compact:false, writing:false
   };
+  const debugTools=createDebugTools({catalog:GAME,api,getGame:()=>window.spacefactory,doc:document,onChange:()=>render(),
+    loadWorld:async()=>{const [map,world,deposits]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/deposits.js')]);return {map,world,deposits}}});
   const fmt = x => Number.isFinite(Number(x)) ? Number(x).toLocaleString('cs-CZ',{maximumFractionDigits:2}) : '–';
   const num = (x, alt=0) => Number.isFinite(Number(x)) ? Number(x) : alt;
   const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -43,7 +161,7 @@
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.2.2',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.3.0',at:new Date().toISOString(),station:state.stationId,
     groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -261,7 +379,7 @@
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.2.2',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.3.0',at:new Date().toISOString(),reference:GAME.version,
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -323,8 +441,39 @@
   function planRow(p){
     return `<label class="plan ${p.modified?'':'same'}"><input type="checkbox" data-plan="${esc(p.id)}" ${checked(p.id)?'checked':''} ${!p.modified?'disabled':''}><span class="info"><strong>${esc(item(p.resource))}</strong> · ${esc(p.change)}<small>Současné směry: ${esc(places(p.kind==='request'?p.existing?.from:p.existing?.to).join(' → ')||'žádné')}</small><small>${p.current===null?'chybí':fmt(p.current)} → <b>${fmt(p.target)}</b> ks (${p.target/stack(p.resource)} stacků)</small><small>${esc(p.kind==='request'?'mineři → stanice':'pouze ostatní stanice')} · ${esc(p.reason)}</small>${p.risk.length?`<small class="caution">${esc(p.risk[0])}</small>`:''}</span></label>`;
   }
+  function debugMenu(){
+    const d=debugTools.state,s=d.snapshot,planet=s?.planets.find(p=>p.letter===d.letter);
+    const disabled=d.busy?'disabled':'';
+    const kv=(label,value)=>`<tr><th>${esc(label)}</th><td>${esc(value??'neznámé')}</td></tr>`;
+    return `${wrap(`<b>Cheat / Debug · klientské nástroje</b><p>Resource X-Ray a inspektor zobrazují generovaná data bez ohledu na průzkum nebo aktivní minery. Vyčerpání, vlastnictví a dostupnost na serveru nejsou ověřené. Kamera mění pouze pohled.</p>
+      <label>ID systému <input id="debug-system" type="text" maxlength="40" placeholder="sx.sy.cell" value="${esc(d.input)}" ${disabled}></label>
+      <button data-debug="inspect" ${disabled}>Načíst ID</button><button data-debug="current" ${disabled}>Aktuální systém mapy</button>
+      <button data-debug="station" ${disabled||!state.view?'disabled':''}>Systém vybrané stanice</button><button data-debug="return" ${disabled||!debugTools.canReturn?'disabled':''}>Vrátit kameru</button>
+      <p role="status" class="${d.error?'err':''}">${esc(d.busy?'Načítám generátor…':d.error||d.notice)}</p>`)}
+      ${s?wrap(`<b>${esc(s.system.name)} · ${esc(s.system.id)}</b><p>Souřadnice: ${fmt(s.system.x)}, ${fmt(s.system.y)} ly · sektor ${esc(s.system.sx)}, ${esc(s.system.sy)} · buňka ${esc(s.system.cell)} · tier ${esc(s.system.tier)}</p>
+      <button data-debug="system-camera">Přesun kamery na systém</button><button data-debug="xray">${d.xray?'Vypnout':'Zapnout'} Resource X-Ray</button><button data-debug="export">Export inspektoru</button>
+      <p>X-Ray přidá popisky k rozpoznaným planetám aktuálně otevřeného systému. Při změně systému se skryjí. Přejmenované planety nemusí být rozpoznány.</p>
+      <label>Planeta <select id="debug-planet">${s.planets.map(p=>`<option value="${esc(p.letter)}" ${p.letter===d.letter?'selected':''}>${esc(p.name||p.letter)} · ${esc(p.kind)}</option>`).join('')}</select></label>
+      ${planet?`<button data-debug="planet-camera">Vystředit kameru na planetu</button><div class="table"><table><tbody>
+      ${kv('Typ',planet.kind)}${kv('Oběžná vzdálenost (AU)',planet.orbitAU)}${kv('Poloměr (Země = 1)',planet.radiusEarth)}${kv('Oběžná doba (roky)',planet.periodYears)}${kv('Teplota (K)',planet.temperatureK)}${kv('Měsíce',planet.moons)}${kv('Prstence',planet.rings?'ano':'ne')}${kv('Obyvatelná podle generátoru',planet.habitable?'ano':'ne')}${kv('Bohatost',planet.richness)}
+      </tbody></table></div><b>Počáteční velikosti ložisek podle generátoru</b><div class="table"><table><thead><tr><th>Surovina</th><th>Tier</th><th>Počáteční jednotky</th></tr></thead><tbody>${planet.resources.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.tier)}</td><td>${fmt(r.initialUnits)}</td></tr>`).join('')}</tbody></table></div><p>Počáteční velikost není aktuální zbývající množství. Vlastnictví: neověřené.</p>`:'<p>Systém nemá planety.</p>'}`):''}`;
+  }
+  async function debugAction(name){
+    const d=debugTools.state;if(d.busy)return;d.error='';
+    try{
+      if(name==='inspect')await debugTools.inspect(d.input);
+      else if(name==='current')await debugTools.inspect(debugTools.currentSystemId());
+      else if(name==='station')await debugTools.inspect(state.view?.station?.system);
+      else if(name==='xray')debugTools.setXray(!d.xray);
+      else if(name==='system-camera')debugTools.cameraToSystem();
+      else if(name==='planet-camera')debugTools.cameraToPlanet(d.letter);
+      else if(name==='return')debugTools.returnCamera();
+      else if(name==='export'&&d.snapshot)download(d.snapshot,'aos-toolkit-planet-inspector.json');
+    }catch(e){d.error=String(e.message||e)}
+    render();
+  }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.2.2 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.3.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
@@ -333,13 +482,13 @@
     if(!state.root)return;
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
-    const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.2.2 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít">×</button></header>
+    const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['debug','Debug'],['diag','Diagnostika']];
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.3.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít">×</button></header>
      <nav><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
      <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
-     <main>${({summary,resources,galaxy,production,proposals,diag:diagnostics}[state.tab]||summary)()}</main>
+     <main>${({summary,resources,galaxy,production,proposals,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
      <footer>All Out of Space · ${state.processing?'Probíhá operace':'Připraveno'} <button data-act="exportPlan">Export návrhů</button></footer>`;
     panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;state.view=null;state.plan=[];state.selected.clear();loadView()});
     panel.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;render()}));
@@ -347,6 +496,9 @@
     panel.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('change',()=>{if(state.processing)return;b.checked?state.selected.add(b.dataset.plan):state.selected.delete(b.dataset.plan);render()}));
     panel.querySelector('#crafted')?.addEventListener('change',e=>{if(state.processing)return;settings.includeCraftedExports=e.target.checked;save();createPlan();render()});
     panel.querySelector('#enableWrites')?.addEventListener('change',e=>{if(state.processing)return;settings.enableWrites=e.target.checked;save();render()});
+    panel.querySelector('#debug-system')?.addEventListener('input',e=>{debugTools.state.input=e.target.value});
+    panel.querySelector('#debug-planet')?.addEventListener('change',e=>{debugTools.state.letter=e.target.value;render()});
+    panel.querySelectorAll('[data-debug]').forEach(b=>b.addEventListener('click',()=>debugAction(b.dataset.debug)));
     panel.querySelector('#drag')?.addEventListener('pointerdown',drag);
   }
   async function action(name){
@@ -356,7 +508,7 @@
     if(name==='recalc'){createPlan();render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.2.2',at:new Date().toISOString(),settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'0.3.0',at:new Date().toISOString(),settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,risk:p.risk}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -379,11 +531,12 @@
       [hidden]{display:none!important}#fab{pointer-events:auto;position:fixed;right:18px;bottom:22px;background:#163a49;border:1px solid #38a0b0;color:#e8fcff;font-weight:bold;border-radius:15px;width:57px;height:57px;box-shadow:0 8px 28px #0008}
       #panel{pointer-events:auto;position:fixed;right:16px;top:55px;width:min(650px,calc(100vw - 18px));min-height:350px;max-height:calc(100vh - 75px);display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #446474;border-radius:12px;box-shadow:0 15px 45px #000b;font:12px/1.45 system-ui,Arial,sans-serif;overflow:hidden}
       header{padding:12px 14px;background:#1a3544;display:flex;align-items:center;justify-content:space-between;cursor:move;touch-action:none;user-select:none}header div{display:grid}header b{font-size:15px}header small{font-size:11px;color:#afc6d1}header button{background:#273d49;color:#fff;border:1px solid #56717b;border-radius:6px;font-size:20px;width:30px;height:30px}
-      nav{display:flex;gap:7px;padding:10px 12px}nav select{flex:1;min-width:0;background:#182e3b;border:1px solid #587080;border-radius:6px;color:#fff;padding:7px}button[data-act]{background:#21586a;color:#e4faff;border:1px solid #3b91a0;padding:6px 9px;border-radius:6px}button[data-act]:hover{filter:brightness(1.15)}
+      nav{display:flex;gap:7px;padding:10px 12px}nav select{flex:1;min-width:0;background:#182e3b;border:1px solid #587080;border-radius:6px;color:#fff;padding:7px}button[data-act],button[data-debug]{background:#21586a;color:#e4faff;border:1px solid #3b91a0;padding:6px 9px;border-radius:6px}button[data-act]:hover,button[data-debug]:hover{filter:brightness(1.15)}
       .status{padding:7px 12px;background:#203745;color:#b5dae5;font-size:11px}.err{color:#ffb4a8}.tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid #395666;padding:3px 8px}.tabs button{background:transparent;border:0;border-bottom:2px solid transparent;color:#b5c8d5;padding:7px 9px}.tabs button.active{color:#fff;border-color:#61c2d7}
       main{flex:1;overflow:auto;min-height:120px;padding:11px;overscroll-behavior:contain}.sect{border-bottom:1px solid #294250;padding:6px 0 12px;margin-bottom:8px}.sect>b{display:block;font-size:13px}.sect p{color:#b6cad5;margin:7px 0}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#1b3340;border:1px solid #365666;padding:9px 5px;border-radius:6px;text-align:center}.metric strong{display:block;font-size:21px}.metric small{font-size:10px;color:#b8d3d7}
       .table{overflow:auto;margin:8px 0}.table table{border-collapse:collapse;min-width:440px;width:100%;font-size:11px}.table th,.table td{padding:7px;text-align:left;border-bottom:1px solid #34505c;vertical-align:top}.table th{background:#1e3543;color:#b5e6ed}
       .plan{display:flex;align-items:flex-start;gap:9px;padding:8px 6px;border:1px solid #314f5f;border-radius:7px;margin-top:5px}.plan.same{opacity:.55}.plan input{margin-top:3px}.info{flex:1}.info strong{color:#e7f9ff}.info small{display:block;color:#a9c7d2}.info b{color:#fff}.caution{color:#ffcc7b!important}.tick{display:flex;gap:8px;align-items:center;margin:8px 0}.warning{padding:9px;background:#4b3b20;border-radius:7px;color:#ffde9b}.dangerbtn{background:#762b30!important;border-color:#c85656!important}pre{overflow:auto;background:#162f3b;padding:9px}footer{display:flex;justify-content:space-between;align-items:center;font-size:10px;padding:8px 12px;background:#1a303e;color:#b4c8d3}
+      #debug-system,#debug-planet{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
       @media(max-width:670px){#panel{top:8px;left:8px!important;right:8px!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
     const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit';fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
     const panel=document.createElement('section');panel.id='panel';panel.hidden=true;
