@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.4.1
-// @description  Progression advisor, Smart Logistics, Resource X-Ray, planet inspector and client camera tools (CZ)
+// @version      0.5.0
+// @description  Account overview, network-aware progression advisor, Smart Logistics and client Debug tools (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
 // @updateURL    https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.meta.js
@@ -143,20 +143,32 @@ function createDebugTools({catalog,api,getGame,loadWorld,doc,onChange=()=>{},
 }
 // Read-only progression planning. Rules and snapshots are supplied explicitly.
 const ADVISOR_GOALS={progress:'Postup výzkumem',production:'Soběstačná výroba',expansion:'Příprava expanze',profit:'Ekonomika výroby'};
-function planMaterials(requirements,stock,recipes,catalog){
+function planMaterials(requirements,stock,recipes,catalog,{externalStock=[]}={}){
   const pool=new Map(),surplus=new Map(),used=new Map(),raw=new Map(),crafts=new Map(),blocked=[];
   const positive=n=>Number.isFinite(n)&&n>=0;
   for(const row of stock||[]){
     if(!row||typeof row.resource!=='string'||!positive(row.units))throw Error('Neplatný stav zásob');
     pool.set(row.resource,(pool.get(row.resource)||0)+row.units);
   }
+  const external=externalStock.map(row=>{
+    if(typeof row.station!=='string'||typeof row.resource!=='string'||!Number.isSafeInteger(row.units)||row.units<0)throw Error('Neplatný mezistaniční zdroj');
+    return {...row,left:row.units};
+  }),externalTransfers=[],shortages=new Map();
+  const externalKeys=new Set();for(const row of external){const key=JSON.stringify([row.station,row.resource]);if(externalKeys.has(key))throw Error('Duplicitní mezistaniční zdroj');externalKeys.add(key)}
   const byOutput=new Map();for(const r of recipes||[]){if(byOutput.has(r.output))throw Error('Nejednoznačný recept pro '+r.output);byOutput.set(r.output,r)}
   function need(id,amount,path=[]){
     if(!positive(amount)||!Number.isSafeInteger(amount))throw Error('Materiálový požadavek musí být nezáporné celé číslo');
     if(!catalog.items[id])throw Error('Neznámá položka '+id);
     const held=Math.min(amount,pool.get(id)||0);pool.set(id,(pool.get(id)||0)-held);if(held)used.set(id,(used.get(id)||0)+held);
     const extra=Math.min(amount-held,surplus.get(id)||0);surplus.set(id,(surplus.get(id)||0)-extra);
-    const missing=amount-held-extra;if(!missing)return;
+    let missing=amount-held-extra;if(!missing)return;
+    shortages.set(id,(shortages.get(id)||0)+missing);
+    for(const donor of external){
+      if(donor.resource!==id||donor.left<=0)continue;const take=Math.min(missing,donor.left);donor.left-=take;missing-=take;
+      if(take){const old=externalTransfers.find(t=>t.station===donor.station&&t.resource===id);if(old)old.amount+=take;else externalTransfers.push({station:donor.station,name:donor.name||donor.station,resource:id,amount:take})}
+      if(!missing)break;
+    }
+    if(!missing)return;
     if(path.includes(id))throw Error('Cyklus výrobních receptů: '+[...path,id].join(' → '));
     if(catalog.items[id].c==='raw'){raw.set(id,(raw.get(id)||0)+missing);return}
     const recipe=byOutput.get(id);
@@ -169,14 +181,14 @@ function planMaterials(requirements,stock,recipes,catalog){
       machine:recipe.machine,level:recipe.level||1,research:recipe.research||null,building:!!recipe.building});
   }
   for(const [id,n] of Object.entries(requirements).sort(([a],[b])=>a.localeCompare(b)))need(id,n);
-  return {requirements:{...requirements},usedStock:Object.fromEntries(used),rawMissing:Object.fromEntries(raw),crafts:[...crafts.values()],blocked};
+  return {requirements:{...requirements},usedStock:Object.fromEntries(used),rawMissing:Object.fromEntries(raw),crafts:[...crafts.values()],blocked,externalTransfers,shortages:Object.fromEntries(shortages)};
 }
 function validateResearch(r){
   const record=v=>v&&typeof v==='object'&&!Array.isArray(v);
   if(!record(r)||!record(r.steps)||!record(r.done)||!record(r.stations))throw Error('Neznámý formát stavu výzkumu; doporučení nelze bezpečně sestavit.');
   for(const local of Object.values(r.stations))if(!record(local)||!record(local.steps)||!record(local.done))throw Error('Neznámý formát lokálního výzkumu');
 }
-function buildProgressPlan({view,research,rules,catalog,goal='progress',projectId='',itemId='iron-ingot',quantity=10,flows=[],systemResources=[],depositsVerified=false,market=null,at}){
+function buildProgressPlan({view,research,rules,catalog,goal='progress',projectId='',itemId='iron-ingot',quantity=10,flows=[],systemResources=[],depositsVerified=false,market=null,account=null,at}){
   if(!ADVISOR_GOALS[goal])throw Error('Neznámý cíl poradce');
   if(!view?.station?.id||!Array.isArray(view.stock)||!Array.isArray(view.machines))throw Error('Neznámý formát stanice');
   if(!Number.isSafeInteger(quantity)||quantity<1||quantity>1000000)throw Error('Množství musí být celé číslo od 1 do 1 000 000');
@@ -184,7 +196,7 @@ function buildProgressPlan({view,research,rules,catalog,goal='progress',projectI
   const here=rules.researchAt(research,String(view.station.id)),projects=rules.PROJECTS;
   if(!Array.isArray(projects)||!Array.isArray(rules.RECIPES))throw Error('Chybí herní pravidla');
   const name=id=>catalog.items[id]?.n||id,nfmt=n=>Number(n).toLocaleString('cs-CZ',{maximumFractionDigits:2});
-  const warnings=['Zásoby a výrobní toky platí pro vybranou stanici. Plán není součet zásob celého účtu.','Pořadí je vysvětlitelná heuristika, nikoliv důkaz optimálního postupu.'];
+  const warnings=[account?'Cíl a výzkumné návaznosti platí pro vybranou stanici. Přebytek jiné stanice je pouze podmíněný kandidát dodávky.':'Zásoby a výrobní toky platí pro vybranou stanici. Plán není součet zásob celého účtu.','Pořadí je vysvětlitelná heuristika, nikoliv důkaz optimálního postupu.'];
   const priority=goal==='expansion'?['assembly-bay','station-slots','ship-bay','assembler','tier-2-buildings','floor-20','floor-75','tier-3-buildings','auto-requests','floor-250']:
     ['assembly-bay','assembler','floor-20','station-slots','ship-bay','tier-2-buildings','floor-75','tier-3-buildings','floor-250','auto-requests'];
   const choices=projects.map(p=>({id:p.id,name:p.name,scope:p.scope||'local',bought:rules.isBought(p),done:rules.isDone(here,p.id),available:rules.isOpen(here,p),
@@ -215,15 +227,41 @@ function buildProgressPlan({view,research,rules,catalog,goal='progress',projectI
       requirements=bought?{}:Object.fromEntries(Object.entries(selected.inputs||{}).map(([id,n])=>[id,n*remaining]));
       target={kind:'research',id:selected.id,name:selected.name,scope:rules.isGlobal(selected)?'global':'local',bought,credits:bought?selected.credits:null,remainingSteps:remaining,
         desired:desiredProject?.id||selected.id,prerequisiteFor:desiredProject&&desiredProject.id!==selected.id?desiredProject.name:null};
-      if(rules.isGlobal(selected))warnings.push('Materiálový rozpočet zahrnuje všechny zbývající kroky globálního výzkumu. Jiné stanice mohou část uhradit; jejich zásoby zde nejsou zahrnuté.');
+      if(rules.isGlobal(selected))warnings.push('Materiálový rozpočet zahrnuje všechny zbývající kroky globálního výzkumu pro zvolený cíl. Jiné laboratoře mohou část mezitím uhradit; místní návaznosti zůstávají oddělené.');
     }
   }else{
     if(!catalog.items[itemId]||!rules.RECIPES.some(r=>r.output===itemId))throw Error('Vyber vyráběný produkt');
     target={kind:'production',id:itemId,name:name(itemId),quantity};requirements={[itemId]:quantity};
   }
-  const materialPlan=planMaterials(requirements,view.stock,rules.RECIPES,catalog);
+  const localMaterialPlan=planMaterials(requirements,view.stock,rules.RECIPES,catalog);
+  const donors=(account?.stations||[]).filter(s=>String(s.id)!==String(view.station.id));
+  const externalStock=donors.flatMap(s=>s.stock.filter(r=>r.exportSurplus.units>0).map(r=>({station:s.id,name:s.name,resource:r.resource,units:r.exportSurplus.units})));
+  const materialPlan=account?planMaterials(requirements,view.stock,rules.RECIPES,catalog,{externalStock}):localMaterialPlan;
+  if(account){
+    warnings.push('Mezistaniční zásoby se načítaly postupně. Žádný přesun nebyl proveden; import cíle, priority, aktuální rezervy a skutečné dodání je nutné ověřit.');
+    if(!account.inventoryComplete)warnings.push('Účet je načtený jen částečně. Nepokryté požadavky neprokazují nedostatek v celém účtu; nejprve ověř chybějící stanice.');
+  }
   const recommendations=[];
   const add=(id,type,score,title,reason,action,evidence=[])=>recommendations.push({id,type,score,title,reason,action,evidence});
+  for(const transfer of materialPlan.externalTransfers){
+    add('transfer:'+transfer.station+':'+transfer.resource,'transfer',145,`Využij vlastní přebytek ${name(transfer.resource)}`,
+      `Ve stanici ${transfer.name} je pro plán vyčleněný kandidát ${nfmt(transfer.amount)} ks nad exportní rezervou.`,
+      'Ověř import z vlastních stanic, kapacitu cílového skladu a skutečné dodání. Jde o návrh, nikoliv uskutečněný přesun; rezervy ani pravidla se nemění.',
+      [`Zdrojová stanice: ${transfer.station}.`]);
+  }
+  for(const [resource,needed] of Object.entries(materialPlan.shortages)){
+    const allocated=materialPlan.externalTransfers.filter(t=>t.resource===resource).reduce((n,t)=>n+t.amount,0),left=needed-allocated;
+    if(left<=0)continue;
+    const holdings=donors.map(s=>({station:s,name:s.name,row:s.stock.find(r=>r.resource===resource)})).filter(s=>s.row?.units>0);
+    const known=holdings.reduce((n,s)=>n+s.row.units,0)-allocated;
+    if(known>0)add('holding:'+resource,'own-stock',135,`Prověř vlastní zásobu ${name(resource)}`,
+      `Jinde v účtu je ještě nejméně ${nfmt(known)} ks; pro tuto větev plánu zbývá ${nfmt(left)} ks.`,
+      'Zásoba není zahrnutá jako volný přebytek. Ověř rezervy, spotřebu zdroje a nastavení logistiky před další těžbou nebo výrobou.',
+      holdings.map(s=>`${s.name}: ${nfmt(s.row.units)} ks; ${s.row.exportSurplus.reason}.`));
+  }
+  if(account&&!account.inventoryComplete)add('account-incomplete','data',150,'Doplň chybějící stanice účtu',
+    `Načteno ${account.loaded} z ${account.total} prověřovaných detailů.`,
+    'Obnov společný přehled. Nenalezené zásoby nejsou nulové a z neúplného snímku nelze potvrdit celkový nedostatek.');
   const flowMap=new Map(flows.map(f=>[f.resource,f]));
   const rawRows=Object.entries(materialPlan.rawMissing).map(([id,amount])=>{
     const f=flowMap.get(id),net=Number(f?.made||0)-Number(f?.used||0);
@@ -245,7 +283,7 @@ function buildProgressPlan({view,research,rules,catalog,goal='progress',projectI
       `Ověř linku typu ${c.building?'Building Crafter':c.machine||'dle receptu'} a její tier ${c.level}. ${rawRows.length?'Nejdříve doplň chybějící suroviny.':'Materiálový rozpočet pokrývají zásoby; kapacitu linky ověř ve hře.'}`,
       [`Zjištěná výroba této položky je ${nfmt(flowMap.get(c.resource)?.made||0)} ks/min. Požadovaná linka nemusí být postavená.`]);
   }
-  if(target?.kind==='production'&&!Object.keys(materialPlan.rawMissing).length&&!materialPlan.crafts.length&&!materialPlan.blocked.length){
+  if(target?.kind==='production'&&!materialPlan.externalTransfers.length&&!Object.keys(materialPlan.rawMissing).length&&!materialPlan.crafts.length&&!materialPlan.blocked.length){
     add('stock-ready','inventory',100,'Výrobní cíl už pokrývají zásoby',`${name(target.id)}: požadavek ${nfmt(target.quantity)} ks je v této stanici skladem.`,
       'Není nutné vyrábět další kusy jen pro tento cíl. Ověř, zda je nespotřebovává jiná aktivní výroba.');
   }
@@ -291,10 +329,12 @@ function buildProgressPlan({view,research,rules,catalog,goal='progress',projectI
   }
   const ranked=recommendations.sort((a,b)=>b.score-a.score||a.id.localeCompare(b.id)).slice(0,3).map((r,i)=>({...r,rank:i+1}));
   return {format:1,at,station:{id:String(view.station.id),system:view.station.system,name:view.station.systemName||String(view.station.id)},goal,target,choices,
-    recommendations:ranked,materialPlan,economics,warnings,method:'heuristic',depositsVerified};
+    recommendations:ranked,materialPlan,localMaterialPlan,economics,warnings,
+    account:account?{at:account.at,inventoryComplete:account.inventoryComplete,loaded:account.loaded,total:account.total,
+      failures:account.failures,localRawMissing:localMaterialPlan.rawMissing,remainingRawMissing:materialPlan.rawMissing}:null,method:'heuristic',depositsVerified};
 }
-function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=()=>{},now=()=>new Date().toISOString()}){
-  const state={goal:'progress',projectId:'',itemId:'iron-ingot',quantity:10,busy:false,error:'',snapshot:null};let serial=0;
+function createProgressAdvisor({catalog,api,loadRules,productionFlows,loadAccount=null,onChange=()=>{},now=()=>new Date().toISOString()}){
+  const state={goal:'progress',projectId:'',itemId:'iron-ingot',quantity:10,includeAccount:!!loadAccount,busy:false,error:'',snapshot:null};let serial=0;
   function invalidate(notify=true){serial++;state.snapshot=null;state.error='';state.busy=false;if(notify)onChange()}
   async function refresh(stationId,context={}){
     if(state.busy)return null;
@@ -304,16 +344,127 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
       const [view,research,rules]=await Promise.all([api('/api/stations/view?id='+encodeURIComponent(stationId)),api('/api/research'),loadRules()]);
       if(ticket!==serial)return null;
       if(String(view?.station?.id)!==String(stationId))throw Error('Server vrátil jinou stanici');
+      let account=null;
+      if(state.includeAccount&&loadAccount){
+        account=await loadAccount({reuseView:view,research});if(ticket!==serial)return null;
+        if(!account||account.cancelled)throw Error('Načtení účtu bylo zrušeno nebo selhalo.');
+        if(!account.stations.some(s=>s.id===String(stationId)))throw Error('Vybraná stanice není v aktuálním přehledu vlastních stanic.');
+      }
       let market=null,marketError='';
       if(state.goal==='profit')try{market=await api('/api/market/summary')}catch{marketError='Tržní přehled se nepodařilo načíst.'}
       if(ticket!==serial)return null;
       const snapshot=buildProgressPlan({view,research,rules,catalog,goal:state.goal,projectId:state.projectId,itemId:state.itemId,quantity:Number(state.quantity),
-        flows:productionFlows(view),systemResources:context.resources||[],depositsVerified:context.verified===true&&view.station.system===context.system,market,at:now()});
+        flows:productionFlows(view),systemResources:context.resources||[],depositsVerified:context.verified===true&&view.station.system===context.system,market,account,at:now()});
       if(marketError)snapshot.warnings.push(marketError);state.snapshot=snapshot;return snapshot;
     }catch(e){if(ticket===serial)state.error=String(e.message||e);return null}
     finally{if(ticket===serial){state.busy=false;onChange()}}
   }
   return {state,refresh,invalidate};
+}
+// GET-only account snapshot; stock and flows retain their source station.
+function accountStationId(value){
+  if(!['string','number'].includes(typeof value)||(typeof value==='number'&&!Number.isSafeInteger(value))||String(value).trim()==='')throw Error('Neplatné ID stanice');
+  return String(value);
+}
+function stationExportSurplus(view,resource,units){
+  const rules=(view.exports||[]).filter(r=>r.resource===resource);
+  if(rules.length!==1)return {units:0,reason:rules.length?'Nejednoznačné exporty':'Chybí export do stanic'};
+  const rule=rules[0],destinations=[rule.to].flat().filter(Boolean),group=(view.groups||[]).find(g=>g.id===rule.group);
+  if(view.exportsOn!==true||rule.state==='off'||group?.on===false||!destinations.includes('stations'))return {units:0,reason:'Export do stanic není aktivní'};
+  if(destinations.length!==1)return {units:0,reason:'Více exportních cílů; přebytek není rezervovaný jen stanicím'};
+  const has=(o,k)=>o&&Object.prototype.hasOwnProperty.call(o,k);
+  const reserve=has(rule.reserves,'stations')?rule.reserves.stations:has(rule,'reserve')?rule.reserve:has(rule.keeps,'stations')?rule.keeps.stations:rule.keep;
+  if(typeof reserve!=='number'||!Number.isFinite(reserve)||reserve<0||rule.excess===true)return {units:0,reason:'Exportní rezerva není jednoznačně známá'};
+  return {units:Math.max(0,Math.floor(units-reserve)),reserve,reason:'Přebytek nad rezervou exportu do stanic'};
+}
+function normalizeAccountStation(view,expected,productionFlows,at){
+  if(!view?.station||accountStationId(view.station.id)!==expected||!Array.isArray(view.stock)||!Array.isArray(view.machines)||!Array.isArray(view.requests)||!Array.isArray(view.exports))throw Error('Neplatný detail stanice');
+  if(view.station.mine===false)return null;
+  const seen=new Set(),stock=view.stock.map(s=>{
+    if(!s||typeof s.resource!=='string'||!s.resource||seen.has(s.resource)||!Number.isSafeInteger(s.units)||s.units<0)throw Error('Neplatné nebo duplicitní zásoby');
+    seen.add(s.resource);return {resource:s.resource,units:s.units,exportSurplus:stationExportSurplus(view,s.resource,s.units)};
+  });
+  const flowSeen=new Set();
+  const flows=productionFlows(view).map(f=>{
+    if(typeof f.resource!=='string'||flowSeen.has(f.resource)||![f.made,f.used].every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0))throw Error('Neplatný výrobní tok');
+    flowSeen.add(f.resource);return {resource:f.resource,made:f.made,used:f.used};
+  });
+  return {id:expected,name:view.station.systemName||view.station.name||expected,system:view.station.system,at,stock,flows,
+    activeMachines:view.machines.filter(m=>m.on).length,machines:view.machines.length,
+    bottlenecks:flows.filter(f=>f.used>f.made).map(f=>f.resource)};
+}
+function aggregateAccountStations(stations){
+  const rows=new Map(),seen=new Set();
+  for(const station of stations){
+    if(seen.has(station.id))throw Error('Duplicitní stanice ve společném přehledu');seen.add(station.id);
+    const stock=new Map(station.stock.map(s=>[s.resource,s])),flows=new Map(station.flows.map(f=>[f.resource,f]));
+    for(const resource of new Set([...stock.keys(),...flows.keys()])){
+      const s=stock.get(resource),f=flows.get(resource),source={station:station.id,name:station.name,system:station.system,units:s?.units||0,
+        exportable:s?.exportSurplus.units||0,reserveReason:s?.exportSurplus.reason||'Bez zásoby',made:f?.made||0,used:f?.used||0};
+      if(!rows.has(resource))rows.set(resource,{resource,units:0,exportable:0,made:0,used:0,sources:[]});
+      const row=rows.get(resource);for(const k of ['units','exportable','made','used']){row[k]+=source[k];if(!Number.isFinite(row[k])||(k==='units'&&!Number.isSafeInteger(row[k])))throw Error('Překročen rozsah součtu zásob')}
+      row.sources.push(source);
+    }
+  }
+  return [...rows.values()].sort((a,b)=>a.resource.localeCompare(b.resource)).map(r=>({...r,net:r.made-r.used}));
+}
+function summarizeAccountResearch(research,rules,stations){
+  const record=v=>v&&typeof v==='object'&&!Array.isArray(v);
+  if(!record(research?.done)||!record(research?.steps)||!record(research?.stations))throw Error('Neznámý formát výzkumu');
+  for(const local of Object.values(research.stations))if(!record(local?.done)||!record(local?.steps))throw Error('Neplatný lokální výzkum');
+  const project=(p,here)=>({id:p.id,name:p.name,done:rules.isDone(here,p.id),steps:rules.isBought(p)?null:rules.stepsDone(here,p.id),total:rules.isBought(p)?null:p.steps,bought:rules.isBought(p)});
+  const global=rules.researchAt(research),globalProjects=rules.PROJECTS.filter(rules.isGlobal).map(p=>project(p,global));
+  const local=stations.map(s=>{const here=rules.researchAt(research,s.id);return {station:s.id,name:s.name,projects:rules.PROJECTS.filter(p=>!rules.isGlobal(p)).map(p=>project(p,here))}});
+  return {global:globalProjects,local};
+}
+function createAccountOverview({api,productionFlows,loadResearchRules,onChange=()=>{},now=()=>new Date().toISOString(),delay=ms=>new Promise(r=>setTimeout(r,ms))}){
+  const state={busy:false,progress:0,total:0,error:'',snapshot:null,query:''};let serial=0,working=null;
+  const emit=()=>onChange();
+  function snapshot(cancelled=false){
+    const inventoryComplete=!cancelled&&working.progress===working.total&&!working.failures.length;
+    return {format:1,startedAt:working.startedAt,at:now(),inventoryComplete,complete:inventoryComplete&&working.research!==null,cancelled,
+      listed:working.listed,total:working.total,loaded:working.stations.length,excluded:working.excluded,
+      failures:working.failures.map(f=>({...f})),stations:[...working.stations],resources:aggregateAccountStations(working.stations),research:working.research,
+      warnings:['Snímek se načítá postupně a není atomický. Výrobní toky jsou nominální; zásoby se mohou mezitím změnit.',
+        'Přebytek nad exportní rezervou je kandidát pro dodávku, nikoliv potvrzený převod. Importní pravidla cíle a skutečné dodávky je nutné ověřit.']};
+  }
+  function invalidate(){serial++;state.busy=false;state.snapshot=null;state.error='';working=null;emit()}
+  function cancel(){if(!state.busy)return;serial++;state.snapshot=snapshot(true);state.busy=false;state.error='Načítání zrušeno; zobrazené součty zahrnují jen načtené stanice.';working=null;emit()}
+  async function refresh({reuseView=null,research=null}={}){
+    if(state.busy)throw Error('Přehled účtu se již načítá');
+    const ticket=++serial;state.busy=true;state.error='';state.snapshot=null;state.progress=0;state.total=0;
+    working={startedAt:now(),stations:[],failures:[],research:null,listed:0,excluded:0,progress:0,total:0};emit();
+    const current=()=>ticket===serial;
+    try{
+      const listing=await api('/api/stations');if(!current())return null;
+      if(!Array.isArray(listing.stations))throw Error('Odpověď neobsahuje seznam stanic');
+      const unique=new Map();for(const row of listing.stations){const id=accountStationId(row?.id);const old=unique.get(id);unique.set(id,{...row,id,mine:row.mine===false||old?.mine===false?false:row.mine})}
+      working.listed=unique.size;const eligible=[...unique.values()].filter(s=>s.mine!==false);working.excluded=unique.size-eligible.length;
+      working.total=eligible.length;state.total=eligible.length;emit();
+      for(const [index,entry] of eligible.entries()){
+        if(!current())return null;
+        try{
+          const view=reuseView&&String(reuseView.station?.id)===entry.id?reuseView:await api('/api/stations/view?id='+encodeURIComponent(entry.id));
+          if(!current())return null;
+          const station=normalizeAccountStation(view,entry.id,productionFlows,now());
+          if(station)working.stations.push(station);else working.excluded++;
+        }catch(e){if(!current())return null;working.failures.push({station:entry.id,name:entry.systemName||entry.name||entry.id,message:'Detail stanice se nepodařilo načíst nebo ověřit.'})}
+        working.progress++;state.progress=working.progress;emit();
+        if(index+1<eligible.length){await delay(150);if(!current())return null}
+      }
+      try{
+        const r=research||await api('/api/research');if(!current())return null;
+        const rules=await loadResearchRules();if(!current())return null;
+        const known=eligible.filter(s=>!working.stations.some(x=>x.id===s.id)?working.failures.some(x=>x.station===s.id):true).map(s=>({id:s.id,name:s.systemName||s.name||s.id}));
+        working.research=summarizeAccountResearch(r,rules,known);
+      }catch{if(!current())return null;working.research=null}
+      if(!current())return null;
+      state.snapshot=snapshot();if(!state.snapshot.complete)state.error='Přehled je neúplný. Chybějící data nejsou nulové zásoby.';
+      return state.snapshot;
+    }catch(e){if(current()){state.snapshot=null;state.error=String(e.message||e)}return null}
+    finally{if(current()){state.busy=false;working=null;emit()}}
+  }
+  return {state,refresh,invalidate,cancel};
 }
   const STORE = 'aos-toolkit.v0.2';
   const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
@@ -329,7 +480,8 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
   };
   const debugTools=createDebugTools({catalog:GAME,api,getGame:()=>window.spacefactory,doc:document,onChange:()=>render(),
     loadWorld:async()=>{const [map,world,deposits]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/deposits.js')]);return {map,world,deposits}}});
-  const progressAdvisor=createProgressAdvisor({catalog:GAME,api,productionFlows,onChange:()=>render(),
+  const accountOverview=createAccountOverview({api,productionFlows,loadResearchRules:()=>import('/src/research.js'),onChange:()=>render()});
+  const progressAdvisor=createProgressAdvisor({catalog:GAME,api,productionFlows,loadAccount:options=>accountOverview.refresh(options),onChange:()=>render(),
     loadRules:async()=>{const [research,production,buildings]=await Promise.all([import('/src/research.js'),import('/src/production.js'),import('/src/buildings.js')]);
       return {...research,RECIPES:production.RECIPES,buildingById:buildings.buildingById}}});
   const fmt = x => Number.isFinite(Number(x)) ? Number(x).toLocaleString('cs-CZ',{maximumFractionDigits:2}) : '–';
@@ -343,7 +495,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.4.1',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.5.0',at:new Date().toISOString(),station:state.stationId,
     groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -361,7 +513,8 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     } finally {clearTimeout(t)}
   }
   async function loadStations(){
-    if(state.processing)return;
+    if(state.processing||accountOverview.state.busy||progressAdvisor.state.busy)return;
+    accountOverview.invalidate();
     progressAdvisor.invalidate();
     const serial=++state.querySerial; state.processing=true;state.error='';state.notice='Načítám stanice…';render();
     try {
@@ -525,7 +678,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     return Number(r.keeps?.stations??r.keep)===body.keep && equal(places(r.to),body.to) && r.excess===false;
   }
   async function applySelected(){
-    if(state.processing || state.writing)return;
+    if(state.processing || state.writing || accountOverview.state.busy || progressAdvisor.state.busy)return;
     const changes=selectedChanges();if(!changes.length)return;
     if(!settings.enableWrites){state.error='Nejdřív zapni možnost Zápis do hry.';render();return}
     if(state.depositStatus!=='ok'){state.error='Generátor systému není ověřen. Zápis je zablokovaný.';render();return}
@@ -537,7 +690,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     const warning=changes.some(p=>p.kind==='export'&&p.risk.length)?'\nPOZOR: cíl importu 5 stacků je menší než exportní rezerva 10 stacků. Export může zůstat neaktivní.':'';
     if(!confirm(`AOS Toolkit: ${changes.length} změn logistiky na ${stationName}.\n\nZáloha se stáhne jako JSON. Jde o SKUTEČNÉ změny na serveru.${warning}\n\nPokračovat?`))return;
     if(prompt('Pro potvrzení napiš přesně PROVEST:')!=='PROVEST'){state.notice='Zrušeno';render();return}
-    state.processing=true;state.writing=true;progressAdvisor.invalidate();state.error='';state.serverLog=[];state.notice='Kontroluji aktuální konfiguraci…';render();
+    state.processing=true;state.writing=true;accountOverview.invalidate();progressAdvisor.invalidate();state.error='';state.serverLog=[];state.notice='Kontroluji aktuální konfiguraci…';render();
     try{
       const fresh=await api('/api/stations/view?id='+encodeURIComponent(stationId));validateView(fresh,stationId);
       if(configSignature(fresh)!==signature)throw Error('Konfigurace se od náhledu změnila. Obnov detail a zkontroluj nový návrh');
@@ -563,7 +716,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.4.1',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.5.0',at:new Date().toISOString(),reference:GAME.version,
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -609,7 +762,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
   function proposals(){
     if(!state.view)return wrap('<p>Nejprve načti stanici.</p>');
     const changed=state.plan.filter(p=>p.modified).length;
-    const disabled=state.processing||state.depositStatus!=='ok';
+    const disabled=state.processing||accountOverview.state.busy||progressAdvisor.state.busy||state.depositStatus!=='ok';
     return `${wrap(`<b>Návrh podle stacků</b><p>Import <strong>5 stacků</strong> (25 % kapacity 20stackové stanice), exportní rezerva <strong>10 stacků</strong> (50 %). Každý item má vlastní velikost stacku.</p>
       <label class="tick"><input type="checkbox" id="crafted" ${settings.includeCraftedExports?'checked':''}> Navrhnout export i pro již exportované / vyráběné produkty</label>
       <button data-act="recalc">Přepočítat</button><button data-act="selectAll">Vybrat změny</button><button data-act="selectNone">Odznačit</button>
@@ -625,21 +778,47 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
   function planRow(p){
     return `<label class="plan ${p.modified?'':'same'}"><input type="checkbox" data-plan="${esc(p.id)}" ${checked(p.id)?'checked':''} ${!p.modified?'disabled':''}><span class="info"><strong>${esc(item(p.resource))}</strong> · ${esc(p.change)}<small>Současné směry: ${esc(places(p.kind==='request'?p.existing?.from:p.existing?.to).join(' → ')||'žádné')}</small><small>${p.current===null?'chybí':fmt(p.current)} → <b>${fmt(p.target)}</b> ks (${p.target/stack(p.resource)} stacků)</small><small>${esc(p.kind==='request'?'mineři → stanice':'pouze ostatní stanice')} · ${esc(p.reason)}</small>${p.risk.length?`<small class="caution">${esc(p.risk[0])}</small>`:''}</span></label>`;
   }
+  function accountMenu(){
+    const d=accountOverview.state,s=d.snapshot,disabled=d.busy||state.processing||progressAdvisor.state.busy;
+    const query=d.query.toLocaleLowerCase('cs-CZ');
+    return `${wrap(`<b>Účet · společný přehled stanic</b><p>Načte stanice ze seznamu tvých stanic, jejich zásoby, nominální výrobu a výzkum. Výslovně cizí stanice se vynechají. Přehled nic nemění a neodesílá převody.</p>
+      <button data-account="refresh" ${disabled?'disabled':''}>Načíst všechny stanice</button><button data-account="cancel" ${d.busy?'':'disabled'}>Zrušit načítání</button><button data-account="export" ${s?'':'disabled'}>Export přehledu</button>
+      <p role="status" class="${d.error?'err':''}">${esc(d.busy?`Prověřeno ${d.progress}/${d.total} detailů…`:d.error||s?(d.error||'Přehled načten.'):'Připraveno k načtení účtu.')}</p>`)}
+      ${s?`${wrap(`<b>${s.complete?'Úplný':'Neúplný'} snímek účtu</b><p>Načtených stanic: ${s.loaded}; prověřovaných: ${s.total}; vynechaných: ${s.excluded}; chyb: ${s.failures.length}. Výzkum: ${s.research?'načtený':'neověřený'}.</p><p>${esc(s.startedAt)} → ${esc(s.at)}. Součty patří k postupně načtenému snímku, nikoliv jednomu okamžiku.</p>
+      ${s.failures.map(f=>`<p class="err">${esc(f.name)} (${esc(f.station)}): ${esc(f.message)}</p>`).join('')}
+      ${s.warnings.map(w=>`<p>${esc(w)}</p>`).join('')}<p>Export obsahuje soukromé údaje o stanicích; nesdílej jej veřejně.</p>`)}
+      ${wrap(`<b>Stanice</b><div class="table"><table><thead><tr><th>Stanice / systém</th><th>Druhů zásob</th><th>Aktivní stroje</th><th>Nominální deficity</th><th></th></tr></thead><tbody>${s.stations.map(st=>`<tr><td>${esc(st.name)}<br>${esc(st.system)}<br>${esc(st.id)}</td><td>${st.stock.length}</td><td>${st.activeMachines}/${st.machines}</td><td>${esc(st.bottlenecks.map(item).join(', ')||'žádné zjištěné')}</td><td><button data-account-open="${esc(st.id)}" ${disabled?'disabled':''}>Detail stanice</button></td></tr>`).join('')}</tbody></table></div>`)}
+      ${wrap(`<b>Součet zásob a výroby</b><label>Filtrovat surovinu / výrobek <input id="account-filter" value="${esc(d.query)}" ${d.busy?'disabled':''}></label>
+      <div class="table"><table><thead><tr><th>Položka</th><th>Zásoba celkem</th><th>Nad exportními rezervami</th><th>Výroba/min</th><th>Spotřeba/min</th><th>Čistý tok/min</th><th>Kde je</th></tr></thead><tbody>${s.resources.map(r=>{
+        const key=(item(r.resource)+' '+r.resource).toLocaleLowerCase('cs-CZ');
+        return `<tr data-account-resource="${esc(key)}" ${key.includes(query)?'':'hidden'}><td>${esc(item(r.resource))}</td><td>${fmt(r.units)}</td><td>${fmt(r.exportable)}</td><td>${fmt(r.made)}</td><td>${fmt(r.used)}</td><td>${fmt(r.net)}</td><td><details><summary>${r.sources.length} stanic</summary>${r.sources.map(x=>`<p>${esc(x.name)}: ${fmt(x.units)} ks; nad rezervou ${fmt(x.exportable)} ks.<br>${esc(x.reserveReason)}</p>`).join('')}</details></td></tr>`;
+      }).join('')}</tbody></table></div><p>${s.inventoryComplete?'Součet všech načtených vlastních stanic.':'Jde pouze o známý součet načtených stanic. Neúplný snímek neprokazuje celkový nedostatek.'} Mezistaniční dodávky nejsou druhá výroba a do toků se znovu nepřičítají.</p>`)}
+      ${s.research?wrap(`<b>Výzkum účtu</b><p>Globální dokončeno ${s.research.global.filter(p=>p.done).length}/${s.research.global.length}; globální projekty se počítají jednou.</p>
+      <div class="table"><table><thead><tr><th>Globální projekt</th><th>Stav</th></tr></thead><tbody>${s.research.global.map(p=>`<tr><td>${esc(p.name)}</td><td>${p.done?'hotovo':p.bought?'nákup za kredity':`${fmt(p.steps)}/${fmt(p.total)} kroků`}</td></tr>`).join('')}</tbody></table></div>
+      <b>Lokální výzkum po stanicích</b>${s.research.local.map(st=>`<p>${esc(st.name)}: ${st.projects.map(p=>`${esc(p.name)} — ${p.done?'hotovo':`${fmt(p.steps)}/${fmt(p.total)}`}`).join(' · ')||'žádné lokální projekty'}</p>`).join('')}`):''}`:''}`;
+  }
+  async function accountAction(name){
+    if(name==='cancel'){accountOverview.cancel();return}
+    if(name==='export'){if(accountOverview.state.snapshot)download(accountOverview.state.snapshot,'aos-toolkit-account.json');return}
+    if(name==='refresh'&&!state.processing&&!progressAdvisor.state.busy&&!accountOverview.state.busy){progressAdvisor.invalidate();await accountOverview.refresh()}
+  }
   function advisorMenu(){
-    const d=progressAdvisor.state,s=d.snapshot,disabled=d.busy||state.processing;
+    const d=progressAdvisor.state,s=d.snapshot,disabled=d.busy||state.processing||accountOverview.state.busy;
     const options=Object.entries(ADVISOR_GOALS).map(([id,label])=>`<option value="${id}" ${d.goal===id?'selected':''}>${esc(label)}</option>`).join('');
     const products=Object.entries(GAME.recipes).sort(([a],[b])=>item(a).localeCompare(item(b))).map(([id])=>`<option value="${esc(id)}" ${id===d.itemId?'selected':''}>${esc(item(id))}</option>`).join('');
-    return `${wrap(`<b>Poradce · další nejlepší krok</b><p>Vyber stanici a cíl. Poradce načte aktuální zásoby, nominální výrobní toky a stav výzkumu; nic neprovádí. Materiálový rozpočet platí pro vybranou stanici.</p>
+    return `${wrap(`<b>Poradce · další nejlepší krok</b><p>Vyber stanici a cíl. Poradce načte aktuální zásoby, nominální výrobní toky a stav výzkumu; nic neprovádí. Cíl a lokální výzkumné návaznosti platí pro vybranou stanici; můžeš zahrnout přebytky dalších vlastních stanic.</p>
       <label>Cíl <select id="advisor-goal" ${disabled?'disabled':''}>${options}</select></label>
       ${(d.goal==='production'||d.goal==='profit')?`<label>Výrobek <select id="advisor-item" ${disabled?'disabled':''}>${products}</select></label><label>Počet kusů <input id="advisor-quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity)}" ${disabled?'disabled':''}></label>`:
       `<label>Konkrétní výzkum (volitelně ID z herního seznamu) <input id="advisor-project" maxlength="80" value="${esc(d.projectId)}" placeholder="automatický výběr" ${disabled?'disabled':''}></label>`}
+      <label class="tick"><input id="advisor-account" type="checkbox" ${d.includeAccount?'checked':''} ${disabled?'disabled':''}> Zahrnout vlastní další stanice (čerstvé načtení účtu)</label>
       <button data-advisor="refresh" ${disabled||!state.stationId?'disabled':''}>${d.busy?'Načítám…':'Vyhodnotit další kroky'}</button><button data-advisor="export" ${s?'':'disabled'}>Export plánu</button>
       <p id="advisor-status" role="status" class="${d.error?'err':''}">${esc(d.error||(!state.stationId?'Nejprve načti seznam stanic a vyber stanici.':d.busy?'Načítám data vybrané stanice…':s?'Plán vyhodnocen z načteného snímku.':'Připraveno k vyhodnocení.'))}</p>`)}
       ${s?`<section id="advisor-results">${wrap(`<b>${esc(s.station.name)} · ${esc(ADVISOR_GOALS[s.goal])}</b><p>Stav k ${esc(s.at)}. Systém ${esc(s.station.system)}.</p>
         <p>${s.target?`Nejbližší cíl: <strong>${esc(s.target.name)}</strong>${s.target.kind==='research'?` · ${s.target.scope==='global'?'globální výzkum':'výzkum této stanice'}${s.target.prerequisiteFor?` · předpoklad pro ${esc(s.target.prerequisiteFor)}`:''}`:` · ${fmt(s.target.quantity)} kusů`}`:'Žádný další dostupný výzkum nebyl nalezen. Zvol výrobní cíl nebo zkontroluj dostupná data.'}</p>`)}
+      ${s.account?wrap(`<b>Podklady z účtu</b><p>Načteno ${s.account.loaded}/${s.account.total} detailů; ${s.account.inventoryComplete?'úplné zásoby':'neúplné zásoby'} k ${esc(s.account.at)}. Cíl zůstává ve vybrané stanici.</p>`):''}
       ${s.recommendations.map(r=>wrap(`<b>${r.rank}. ${esc(r.title)}</b><p>${esc(r.reason)}</p><p><strong>Postup:</strong> ${esc(r.action)}</p>${r.evidence.map(e=>`<p>${esc(e)}</p>`).join('')}`)).join('')}
-      ${wrap(`<b>Materiálový rozpočet cíle</b><p>Zásoby byly použity jen jednou; výrobní dávky jsou zaokrouhlené nahoru. Výrobní kapacita ani rozmístění strojů se tím nepotvrzují.</p>
-      <div class="table"><table><thead><tr><th>Položka</th><th>Přímý požadavek</th><th>Použito ze zásob</th><th>Chybějící surovina</th><th>Vyrobit</th></tr></thead><tbody>${[...new Set([...Object.keys(s.materialPlan.requirements),...Object.keys(s.materialPlan.usedStock),...Object.keys(s.materialPlan.rawMissing),...s.materialPlan.crafts.map(c=>c.resource)])].map(id=>`<tr><td>${esc(item(id))}</td><td>${fmt(s.materialPlan.requirements[id]||0)}</td><td>${fmt(s.materialPlan.usedStock[id]||0)}</td><td>${fmt(s.materialPlan.rawMissing[id]||0)}</td><td>${fmt(s.materialPlan.crafts.find(c=>c.resource===id)?.amount||0)}</td></tr>`).join('')}</tbody></table></div>`)}
+      ${wrap(`<b>Materiálový rozpočet cíle</b><p>Zásoby byly použity jen jednou; výrobní dávky jsou zaokrouhlené nahoru. Vlastní dodávky jsou podmíněné kandidáty nad exportními rezervami; zatím nebyly uskutečněné. Výrobní kapacita ani rozmístění strojů se tím nepotvrzují.</p>
+      <div class="table"><table><thead><tr><th>Položka</th><th>Přímý požadavek</th><th>Použito ze zásob</th><th>Navržená vlastní dodávka</th><th>Nepokryto po dodávkách</th><th>Vyrobit</th></tr></thead><tbody>${[...new Set([...Object.keys(s.materialPlan.requirements),...Object.keys(s.materialPlan.usedStock),...Object.keys(s.materialPlan.rawMissing),...s.materialPlan.crafts.map(c=>c.resource),...s.materialPlan.externalTransfers.map(t=>t.resource)])].map(id=>`<tr><td>${esc(item(id))}</td><td>${fmt(s.materialPlan.requirements[id]||0)}</td><td>${fmt(s.materialPlan.usedStock[id]||0)}</td><td>${fmt(s.materialPlan.externalTransfers.filter(t=>t.resource===id).reduce((n,t)=>n+t.amount,0))}</td><td>${fmt(s.materialPlan.rawMissing[id]||0)}</td><td>${fmt(s.materialPlan.crafts.find(c=>c.resource===id)?.amount||0)}</td></tr>`).join('')}</tbody></table></div>`)}
       ${wrap(`<b>Stav výzkumů v kontextu této stanice</b><div class="table"><table><thead><tr><th>Výzkum</th><th>ID</th><th>Rozsah</th><th>Stav</th></tr></thead><tbody>${s.choices.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.id)}</td><td>${p.scope==='global'?'účet':'stanice'}</td><td>${esc(p.done?'hotovo':p.available?p.bought?'lze zvážit nákup; rozpočet neověřen':'návaznosti splněné':'chybí: '+p.missingPrerequisites.join(', '))}</td></tr>`).join('')}</tbody></table></div>`)}
       ${wrap(`<b>Podklady a omezení</b>${s.warnings.map(w=>`<p>${esc(w)}</p>`).join('')}<p>Stav může po načtení zastarat. Volné planety, výkupní ceny, zůstatek účtu a obsazení galaxie nejsou potvrzené.</p>`)}</section>`:''}`;
   }
@@ -679,7 +858,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     render();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.4.1 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.5.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
@@ -688,13 +867,13 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     if(!state.root)return;
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
-    const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['advisor','Poradce'],['debug','Debug'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.4.1 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+    const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['debug','Debug'],['diag','Diagnostika']];
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.5.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
-      <button data-act="refresh" ${state.processing?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
+      <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
      <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
-     <main>${({summary,resources,galaxy,production,proposals,advisor:advisorMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
+     <main>${({summary,resources,galaxy,production,proposals,account:accountMenu,advisor:advisorMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
      <footer>All Out of Space · ${state.processing?'Probíhá operace':'Připraveno'} <button data-act="exportPlan">Export návrhů</button></footer>`;
     panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;state.view=null;state.plan=[];state.selected.clear();loadView()});
     panel.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;render()}));
@@ -717,6 +896,16 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
       });
     }
     panel.querySelectorAll('[data-advisor]').forEach(b=>b.addEventListener('click',()=>advisorAction(b.dataset.advisor)));
+    panel.querySelector('#advisor-account')?.addEventListener('change',e=>{progressAdvisor.state.includeAccount=e.target.checked;progressAdvisor.invalidate()});
+    panel.querySelectorAll('[data-account]').forEach(b=>b.addEventListener('click',()=>accountAction(b.dataset.account)));
+    panel.querySelectorAll('[data-account-open]').forEach(b=>b.addEventListener('click',()=>{
+      if(state.processing||accountOverview.state.busy||progressAdvisor.state.busy)return;
+      state.stationId=b.dataset.accountOpen;state.view=null;state.plan=[];state.selected.clear();state.tab='summary';loadView();
+    }));
+    panel.querySelector('#account-filter')?.addEventListener('input',e=>{
+      accountOverview.state.query=e.target.value;const query=e.target.value.toLocaleLowerCase('cs-CZ');
+      panel.querySelectorAll('[data-account-resource]').forEach(row=>{row.hidden=!row.dataset.accountResource.includes(query)});
+    });
     panel.querySelector('#drag')?.addEventListener('pointerdown',drag);
   }
   async function action(name){
@@ -726,7 +915,7 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
     if(name==='recalc'){createPlan();render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.4.1',at:new Date().toISOString(),settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'0.5.0',at:new Date().toISOString(),settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,risk:p.risk}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -750,12 +939,12 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
       #panel{pointer-events:auto;position:fixed;right:16px;top:55px;width:min(650px,calc(100vw - 18px));min-width:min(320px,calc(100vw - 16px));max-width:calc(100vw - 16px);min-height:min(350px,calc(100vh - 75px));max-height:calc(100vh - 75px);resize:both;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #446474;border-radius:12px;box-shadow:0 15px 45px #000b;font:12px/1.45 system-ui,Arial,sans-serif;overflow:hidden}
       header{padding:12px 14px;background:#1a3544;display:flex;align-items:center;justify-content:space-between;cursor:move;touch-action:none;user-select:none}header div{display:grid}header b{font-size:15px}header small{font-size:11px;color:#afc6d1}header button{background:#273d49;color:#fff;border:1px solid #56717b;border-radius:6px;font-size:20px;width:30px;height:30px}
       #panel header button[data-act="hide"]{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif;flex-shrink:0}
-      nav{display:flex;gap:7px;padding:10px 12px}nav select{flex:1;min-width:0;background:#182e3b;border:1px solid #587080;border-radius:6px;color:#fff;padding:7px}button[data-act],button[data-debug],button[data-advisor]{background:#21586a;color:#e4faff;border:1px solid #3b91a0;padding:6px 9px;border-radius:6px}button[data-act]:hover,button[data-debug]:hover,button[data-advisor]:hover{filter:brightness(1.15)}
+      nav{display:flex;gap:7px;padding:10px 12px}nav select{flex:1;min-width:0;background:#182e3b;border:1px solid #587080;border-radius:6px;color:#fff;padding:7px}button[data-act],button[data-debug],button[data-advisor],button[data-account],button[data-account-open]{background:#21586a;color:#e4faff;border:1px solid #3b91a0;padding:6px 9px;border-radius:6px}button[data-act]:hover,button[data-debug]:hover,button[data-advisor]:hover,button[data-account]:hover,button[data-account-open]:hover{filter:brightness(1.15)}
       .status{padding:7px 12px;background:#203745;color:#b5dae5;font-size:11px}.err{color:#ffb4a8}.tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid #395666;padding:3px 8px}.tabs button{background:transparent;border:0;border-bottom:2px solid transparent;color:#b5c8d5;padding:7px 9px}.tabs button.active{color:#fff;border-color:#61c2d7}
       main{flex:1;overflow:auto;min-height:120px;padding:11px;overscroll-behavior:contain}.sect{border-bottom:1px solid #294250;padding:6px 0 12px;margin-bottom:8px}.sect>b{display:block;font-size:13px}.sect p{color:#b6cad5;margin:7px 0}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}.metric{background:#1b3340;border:1px solid #365666;padding:9px 5px;border-radius:6px;text-align:center}.metric strong{display:block;font-size:21px}.metric small{font-size:10px;color:#b8d3d7}
       .table{overflow:auto;margin:8px 0}.table table{border-collapse:collapse;min-width:440px;width:100%;font-size:11px}.table th,.table td{padding:7px;text-align:left;border-bottom:1px solid #34505c;vertical-align:top}.table th{background:#1e3543;color:#b5e6ed}
       .plan{display:flex;align-items:flex-start;gap:9px;padding:8px 6px;border:1px solid #314f5f;border-radius:7px;margin-top:5px}.plan.same{opacity:.55}.plan input{margin-top:3px}.info{flex:1}.info strong{color:#e7f9ff}.info small{display:block;color:#a9c7d2}.info b{color:#fff}.caution{color:#ffcc7b!important}.tick{display:flex;gap:8px;align-items:center;margin:8px 0}.warning{padding:9px;background:#4b3b20;border-radius:7px;color:#ffde9b}.dangerbtn{background:#762b30!important;border-color:#c85656!important}pre{overflow:auto;background:#162f3b;padding:9px}footer{display:flex;justify-content:space-between;align-items:center;font-size:10px;padding:8px 12px;background:#1a303e;color:#b4c8d3}
-      #debug-system,#debug-planet,[id^="advisor-"]{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
+      #debug-system,#debug-planet,[id^="advisor-"],#account-filter{background:#182e3b;color:#fff;border:1px solid #587080;border-radius:6px;padding:6px;margin:6px 0;max-width:100%}#debug-system{width:100%}
       @media(max-width:670px){#panel{top:8px;left:8px!important;right:auto!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
     const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit';fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
     const panel=document.createElement('section');panel.id='panel';panel.hidden=true;
@@ -779,5 +968,9 @@ function createProgressAdvisor({catalog,api,loadRules,productionFlows,onChange=(
       }).observe(panel);
     }
   }
+  document.addEventListener('spacefactory:auth',e=>{
+    if(e.detail?.profile)return;
+    accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
+  });
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 })();
