@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.4.0
+// @version      0.4.1
 // @description  Progression advisor, Smart Logistics, Resource X-Ray, planet inspector and client camera tools (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
