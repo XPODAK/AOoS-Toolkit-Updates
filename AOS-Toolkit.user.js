@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      0.6.0
-// @description  Galaxy Scanner, explored systems, account advisor, approved logistics and client Debug tools (CZ)
+// @version      0.7.0
+// @description  Mining Optimizer, Galaxy Scanner, account advisor, approved logistics and client Debug tools (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
 // @updateURL    https://raw.githubusercontent.com/XPODAK/AOoS-Toolkit-Updates/main/AOS-Toolkit.meta.js
@@ -778,6 +778,125 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
   }
   return {state,search,cancel,invalidate,page};
 }
+// Read-only mining simulation using the game's own mining/deposit/building functions.
+function buildMiningPlan({catalog,rules,system,generated,live=null,scouted=null,config={},at}){
+  const c={target:'',mode:'even',share:100,minHours:0,specId:'',...config};
+  for(const key of ['share','minHours'])if(c[key]===null||typeof c[key]==='boolean'||String(c[key]).trim()==='')throw Error('Vyplň podíl a minimální životnost');
+  c.share=Number(c.share);c.minHours=Number(c.minHours);
+  if(typeof c.target!=='string'||typeof c.specId!=='string'||scouted!==null&&typeof scouted!=='boolean')throw Error('Neplatný cíl nebo průzkum');
+  if(c.target&&catalog.items[c.target]?.c!=='raw'||!['even','focus'].includes(c.mode)||!Number.isInteger(c.share)||c.share<0||c.share>100||!Number.isFinite(c.minHours)||c.minHours<0||c.minHours>87600||c.mode==='focus'&&!c.target)throw Error('Neplatné volby rozdělení nebo životnosti');
+  for(const key of ['minerRates','mineable','canMine','evenSplit','splitOf','rebalance','splitProblem','drainOf','soonestEmpty','usedUp','depositSize','richnessOf','buildingById'])if(typeof rules[key]!=='function')throw Error('Chybí herní pravidlo '+key);
+  if(!Array.isArray(rules.BUILDINGS)||!Array.isArray(generated?.bodies))throw Error('Neznámý formát generátoru nebo minerů');
+  const specs=rules.BUILDINGS.filter(s=>s.kind==='miner');if(!specs.length||new Set(specs.map(s=>s.id)).size!==specs.length)throw Error('Chybí jednoznačné modely minerů');
+  for(const spec of specs)if(typeof spec.id!=='string'||!Number.isInteger(spec.tier)||spec.tier<1||!Number.isFinite(spec.speed??1)||(spec.speed??1)<0||!Number.isFinite(rules.drainOf(spec))||rules.drainOf(spec)<=0)throw Error('Neznámé vlastnosti mineru');
+  if(c.specId&&!specs.some(s=>s.id===c.specId))throw Error('Vybraný miner není v aktuálních pravidlech');
+  const planets=generated.bodies.filter(b=>b?.letter).map(body=>{
+    if(typeof body.letter!=='string'||!Array.isArray(body.deposits)||new Set(body.deposits).size!==body.deposits.length||body.deposits.some(id=>catalog.items[id]?.c!=='raw'))throw Error('Neznámé generované ložisko');
+    const richness=rules.richnessOf(body);if(!Number.isFinite(richness)||richness<0)throw Error('Neplatná bohatost');
+    const initial=Object.fromEntries(body.deposits.map(id=>{const n=rules.depositSize(id,richness);if(!Number.isFinite(n)||n<0)throw Error('Neplatná velikost ložiska');return [id,n]}));
+    return {letter:body.letter,name:body.name||body.letter,resources:[...body.deposits],richness,initial};
+  });
+  if(new Set(planets.map(p=>p.letter)).size!==planets.length)throw Error('Duplicitní planeta');
+  const byLetter=new Map(planets.map(p=>[p.letter,p])),warnings=[];let structures=[],structuresVerified=false,depletionVerified=false;
+  if(live){
+    try{
+      if(live.system!==undefined&&String(live.system?.id??live.system)!==system.id)throw Error('Odpověď patří jinému systému');
+      if(!Array.isArray(live.structures))throw Error('Chybí seznam staveb');const seen=new Set();
+      for(const s of live.structures){
+        if(!s||typeof s.id!=='string'||seen.has(s.id)||typeof s.building!=='string'||s.system!==undefined&&s.system!==system.id)throw Error('Neplatná stavba');seen.add(s.id);
+        const spec=rules.buildingById(s.building);if(!spec)throw Error('Neznámý typ stavby');if(spec.kind==='miner'&&!byLetter.has(s.planet))throw Error('Miner nemá jednoznačnou planetu');
+      }
+      structures=live.structures;structuresVerified=true;
+    }catch(e){warnings.push('Stavby neověřeny: '+e.message)}
+    if(structuresVerified){
+      try{
+        if(!live.depletion||typeof live.depletion!=='object'||Array.isArray(live.depletion))throw Error('Chybí platná mapa depletion');
+        for(const [letter,entries] of Object.entries(live.depletion)){
+          const planet=byLetter.get(letter);if(!planet||!entries||typeof entries!=='object'||Array.isArray(entries))throw Error('Neznámá planeta vyčerpání');
+          for(const [id,value] of Object.entries(entries))if(!planet.resources.includes(id)||typeof value!=='number'||!Number.isFinite(value)||value<0||value>planet.initial[id]+1e-6)throw Error('Neplatný zůstatek ložiska');
+        }
+        depletionVerified=true;
+      }catch(e){warnings.push('Zůstatky neověřeny: '+e.message)}
+    }
+  }else warnings.push('Serverové stavby a zůstatky nebyly načtené.');
+  if(scouted===null)warnings.push('Průzkum systému není ověřený.');
+  const rows=[];
+  for(const planet of planets){
+    const miners=structures.filter(s=>s.planet===planet.letter&&rules.buildingById(s.building)?.kind==='miner');
+    const remaining=Object.fromEntries(planet.resources.map(id=>[id,depletionVerified?(Object.prototype.hasOwnProperty.call(live.depletion[planet.letter]??{},id)?live.depletion[planet.letter][id]:planet.initial[id]):null]));
+    const current=[];
+    for(const m of miners){
+      const entry={id:m.id,building:m.building,mine:m.mine===true,known:false,rates:null,split:null,error:''};
+      try{
+        if(m.mine!==true)throw Error('Cizí nebo neověřené rozdělení výkonu');
+        const spec=rules.buildingById(m.building);if(!Array.isArray(m.deposits)||new Set(m.deposits).size!==m.deposits.length||m.deposits.some(id=>!planet.resources.includes(id)||!rules.canMine(spec,id)||depletionVerified&&rules.usedUp(remaining[id])))throw Error('Neověřené aktivní suroviny mineru');
+        entry.split=rules.splitOf(m.deposits,m.split);entry.rates=rules.minerRates(spec,m.deposits,m.split,planet.richness);
+        if(Object.values(entry.rates).some(rate=>!Number.isFinite(rate)||rate<0))throw Error('Neplatný aktuální výkon');entry.known=true;
+      }catch(e){entry.error=e.message;entry.rates=null;entry.split=null}
+      current.push(entry);
+    }
+    const occupancy=!structuresVerified?'unknown':!miners.length?'free':miners.length!==1?'multiple':miners[0].mine===true?'own':miners[0].mine===false?'foreign':'unknown';
+    const currentKnown=structuresVerified&&(miners.length===0||current.every(m=>m.known));
+    const currentRate=currentKnown?current.reduce((sum,m)=>sum+(c.target?(m.rates[c.target]||0):Object.values(m.rates).reduce((a,b)=>a+b,0)),0):null;
+    Object.assign(planet,{remaining,occupancy,current,currentRate});
+    for(const spec of specs.filter(spec=>!c.specId||spec.id===c.specId)){
+      const active=rules.mineable(spec,planet.resources).filter(id=>!depletionVerified||!rules.usedUp(remaining[id]));
+      if(c.mode==='focus'&&active.length===1&&active[0]===c.target&&c.share!==100)warnings.push('Planeta '+planet.letter+' / '+spec.id+': jediná aktivní surovina má podle hry vždy 100 % výkonu.');
+      let split=rules.evenSplit(active);if(c.mode==='focus'&&active.includes(c.target))split=rules.rebalance(split,active,c.target,c.share);
+      if(active.length&&rules.splitProblem(active,split))throw Error('Herní pravidla odmítla navržený split');
+      const rates=rules.minerRates(spec,active,split,planet.richness);if(Object.values(rates).some(rate=>!Number.isFinite(rate)||rate<0))throw Error('Neplatný vypočtený výkon');
+      const resources=planet.resources.map(id=>{
+        const mineable=rules.canMine(spec,id),left=remaining[id],rate=rates[id]||0,share=split[id]||0;
+        const minimumSeconds=depletionVerified&&rate>0?rules.soonestEmpty(spec,id,left,planet.richness,share):null;
+        if(minimumSeconds!==null&&(!Number.isFinite(minimumSeconds)||minimumSeconds<0))throw Error('Neplatná životnost ložiska');
+        return {id,mineable,exhausted:depletionVerified?rules.usedUp(left):null,initialUnits:planet.initial[id],remaining:left,share,rate,drainPerMinute:rate*rules.drainOf(spec),maximumOutput:!mineable?0:depletionVerified?(rules.usedUp(left)?0:left/rules.drainOf(spec)):null,minimumSeconds};
+      });
+      const positive=resources.filter(r=>r.rate>0),times=positive.map(r=>r.minimumSeconds),minimumHours=positive.length&&times.every(n=>n!==null)?Math.min(...times)/3600:null;
+      const rate=c.target?(rates[c.target]||0):Object.values(rates).reduce((a,b)=>a+b,0);
+      let reason=occupancy==='free'?(scouted===true?'Bez mineru podle serveru; podmíněný návrh stavby':'Nejprve ověř/průzkumej systém'):occupancy==='own'?'Vlastní miner; hypotetická změna rozdělení nebo upgrade':occupancy==='foreign'?'Cizí miner — nenavrhuje se zásah':occupancy==='multiple'?'Více minerů na planetě — ověř stav ručně':'Neověřené stavby — nelze doporučit obsazení';
+      const oldSpec=miners.length===1?rules.buildingById(miners[0].building):null,downgrade=occupancy==='own'&&spec.tier<oldSpec.tier;
+      const durationPass=c.minHours===0||minimumHours!==null&&minimumHours>=c.minHours;
+      const eligible=['free','own'].includes(occupancy)&&!downgrade&&rate>0&&durationPass;
+      if(downgrade)reason='Nižší tier než současný miner — není doporučený upgrade';
+      if(currentRate!==null&&rate<currentRate)reason+='; výkon cíle je nižší než při současném rozdělení';
+      rows.push({planet:planet.letter,building:spec.id,name:spec.name||spec.id,tier:spec.tier,richness:planet.richness,split,rates,resources,rate,minimumHours,currentRate,gain:currentRate===null?null:rate-currentRate,occupancy,eligible,durationPass,reason,drain:rules.drainOf(spec)});
+    }
+  }
+  rows.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||b.rate-a.rate||a.drain-b.drain||a.planet.localeCompare(b.planet)||a.building.localeCompare(b.building));
+  warnings.push('Výkony jsou nominální při nepřetržitém odběru. Neodebraná produkce ložiska nevyčerpává.');
+  warnings.push('Modely minerů nejsou potvrzené jako odemčené, dostupné v inventáři nebo proveditelné k umístění.');
+  if(!depletionVerified)warnings.push('Generované počáteční zásoby nejsou aktuální zůstatky; životnost z nich není odvozena.');
+  return {at,system:{id:system.id,name:system.name,x:system.x,y:system.y},config:c,scouted,structuresVerified,depletionVerified,specs:specs.map(s=>({id:s.id,name:s.name||s.id,tier:s.tier,speed:s.speed??1,drain:rules.drainOf(s)})),planets,rows,best:rows.find(r=>r.eligible)||null,warnings};
+}
+function createMiningOptimizer({api,catalog,loadRules,systemLabel=(id,s)=>s.name,onChange=()=>{},now=()=>new Date().toISOString()}){
+  const state={input:'',busy:false,error:'',notice:'Načti systém pro porovnání těžby.',config:{target:'',mode:'even',share:100,minHours:0,specId:''},snapshot:null};let serial=0,base=null;
+  const emit=()=>onChange();
+  function invalidate(notify=true){serial++;base=null;state.busy=false;state.snapshot=null;state.error='';state.notice='Data se změnila; načti systém znovu.';if(notify)emit()}
+  function cancel(){if(!state.busy)return;invalidate(false);state.notice='Načítání zrušeno.';emit()}
+  function recalculate(notify=true){
+    state.snapshot=null;state.error='';
+    try{if(base){state.snapshot=buildMiningPlan({...base,config:state.config});state.notice='Porovnání přepočítané z načteného snímku.'}}
+    catch(e){state.error=String(e.message||e)}if(notify)emit();
+  }
+  async function refresh(id=state.input){
+    if(state.busy)return;const text=String(id??'').trim();state.input=text;state.busy=true;state.error='';state.snapshot=null;base=null;const ticket=++serial;state.notice='Načítám pravidla a serverový stav…';emit();
+    try{
+      if(!/^-?\d{1,10}\.-?\d{1,10}\.\d{1,3}$/.test(text))throw Error('Zadej přesné ID systému sx.sy.cell');
+      const meta=await api('/api/map/meta');if(ticket!==serial)return;
+      if(!['number','string'].includes(typeof meta.seed)||String(meta.seed).trim()===''||!Number.isSafeInteger(Number(meta.seed)))throw Error('Chybí platný seed');
+      const rules=await loadRules();if(ticket!==serial)return;const system=rules.map.systemById(Number(meta.seed),text);if(!system||system.id!==text||!Number.isFinite(system.x)||!Number.isFinite(system.y))throw Error('Systém nelze ověřit');
+      const generated=rules.world.generateSystem(Number(meta.seed),system);let live=null,scouted=null;const evidenceWarnings=[];
+      try{const body=await api('/api/units');if(ticket!==serial)return;if(!Array.isArray(body.scouted)||body.scouted.some(id=>typeof id!=='string'||!/^[-]?\d{1,10}\.[-]?\d{1,10}\.\d{1,3}$/.test(id)))throw Error('Neznámý seznam průzkumu');scouted=body.scouted.includes(text)}catch{evidenceWarnings.push('Průzkum se nepodařilo potvrdit.')}
+      if(ticket!==serial)return;
+      try{live=await api('/api/structures?system='+encodeURIComponent(text));if(ticket!==serial)return}catch{evidenceWarnings.push('Serverové stavby a zůstatky nejsou dostupné.')}
+      if(ticket!==serial)return;
+      base={catalog,rules,system:{...system,name:systemLabel(system.id,system)||system.name},generated,live,scouted,at:now()};
+      state.snapshot=buildMiningPlan({...base,config:state.config});state.snapshot.warnings.push(...evidenceWarnings);state.notice='Systém načten. Jde o simulaci; žádná nastavení se neodesílají.';
+    }catch(e){if(ticket===serial){state.error=String(e.message||e);state.snapshot=null;base=null}}
+    finally{if(ticket===serial){state.busy=false;emit()}}
+  }
+  return {state,refresh,recalculate,invalidate,cancel};
+}
   const STORE = 'aos-toolkit.v0.2';
   const old = (() => { try { return JSON.parse(localStorage.getItem('aos-toolkit.v0.1') || '{}') } catch { return {} } })();
   const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') } catch { return {} } })();
@@ -804,6 +923,8 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
     loadRules:async()=>{const [map,world,places,buildings]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/ui/places.js'),import('/src/buildings.js')]);exploredLabel=places.systemText;exploredBuildingSpec=buildings.buildingById;return {map,world}}});
   const galaxyScanner=createGalaxyScanner({api,catalog:GAME,summarizeStructures:(list,id)=>summarizeSystemStructures(list,id,lookupExploredBuilding),systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored(),
     loadRules:async()=>{const [map,world,deposits,places,buildings]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/deposits.js'),import('/src/ui/places.js'),import('/src/buildings.js')]);exploredLabel=places.systemText;exploredBuildingSpec=buildings.buildingById;return {map,world,deposits}}});
+  const miningOptimizer=createMiningOptimizer({api,catalog:GAME,systemLabel:(id,system)=>exploredLabel?.(id,system.name)||system.name,onChange:()=>renderExplored(),
+    loadRules:async()=>{const [map,world,buildings,mining,deposits,places]=await Promise.all([import('/src/world/mapgen.js'),import('/src/world/systemgen.js'),import('/src/buildings.js'),import('/src/mining.js'),import('/src/deposits.js'),import('/src/ui/places.js')]);exploredLabel=places.systemText;return {map,world,...buildings,...mining,...deposits,richnessOf:world.richnessOf}}});
   const fmt = x => Number.isFinite(Number(x)) ? Number(x).toLocaleString('cs-CZ',{maximumFractionDigits:2}) : '–';
   const num = (x, alt=0) => Number.isFinite(Number(x)) ? Number(x) : alt;
   const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -815,7 +936,7 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.6.0',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.7.0',at:new Date().toISOString(),station:state.stationId,
     requestsOn:state.view?.requestsOn,exportsOn:state.view?.exportsOn,groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -1103,7 +1224,7 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.6.0',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.7.0',at:new Date().toISOString(),reference:GAME.version,
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
         machines:v.machines?.length||0,miners:v.miners?.length||0,planets:state.planets.length,deposits:state.depositNames.length},
@@ -1256,17 +1377,17 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
   function exploredCounts(row,key){const n=row[key];return n===null||row.error?'neověřeno':n>0?`${n}${row.unknown?' + ?':''}`:row.unknown?'neověřeno':'ne'}
   function exploredMarkup(){
     const d=exploredSystems.state,p=exploredSystems.page();
-    const header=`<header id="explored-drag"><div><b>Systémy · Galaxy Scanner</b><small>${galaxyScanner.state.busy?'Scanner běží · '+galaxyScanner.state.visited+' systémů':state.exploredTab==='scanner'&&galaxyScanner.state.at?'Scanner · '+galaxyScanner.state.rows.length+' shod'+(galaxyScanner.state.complete?'':' · dílčí výsledek'):`Serverový průzkum · ${d.total} systémů`}</small></div><div class="window-controls"><button data-explored="minimize" aria-label="${state.exploredMinimized?'Obnovit okno':'Minimalizovat okno'}" aria-expanded="${!state.exploredMinimized}">${state.exploredMinimized?'□':'−'}</button><button data-explored="close" aria-label="Zavřít prozkoumané systémy">×</button></div></header>`;
+    const header=`<header id="explored-drag"><div><b>Systémy · AOS Toolkit</b><small>${miningOptimizer.state.busy?'Těžba · načítám systém…':galaxyScanner.state.busy?'Scanner běží · '+galaxyScanner.state.visited+' systémů':state.exploredTab==='scanner'&&galaxyScanner.state.at?'Scanner · '+galaxyScanner.state.rows.length+' shod'+(galaxyScanner.state.complete?'':' · dílčí výsledek'):`Serverový průzkum · ${d.total} systémů`}</small></div><div class="window-controls"><button data-explored="minimize" aria-label="${state.exploredMinimized?'Obnovit okno':'Minimalizovat okno'}" aria-expanded="${!state.exploredMinimized}">${state.exploredMinimized?'□':'−'}</button><button data-explored="close" aria-label="Zavřít prozkoumané systémy">×</button></div></header>`;
     if(state.exploredMinimized)return header;
     return `${header}
-    <div class="tabs"><button data-explored="tabList" class="${state.exploredTab==='list'?'active':''}">Prozkoumané</button><button data-explored="tabExpansion" class="${state.exploredTab==='expansion'?'active':''}">Doporučené systémy</button><button data-explored="tabScanner" class="${state.exploredTab==='scanner'?'active':''}">Galaxy Scanner</button></div>${state.exploredTab==='scanner'?scannerMarkup():state.exploredTab==='expansion'?expansionMarkup():`<div class="explored-tools"><button data-explored="refresh" ${d.busy||state.writing?'disabled':''}>Načíst / obnovit</button><button data-explored="cancel" ${d.busy?'':'disabled'}>Zrušit načítání</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button>
+    <div class="tabs"><button data-explored="tabList" class="${state.exploredTab==='list'?'active':''}">Prozkoumané</button><button data-explored="tabExpansion" class="${state.exploredTab==='expansion'?'active':''}">Doporučené systémy</button><button data-explored="tabScanner" class="${state.exploredTab==='scanner'?'active':''}">Galaxy Scanner</button><button data-explored="tabMining" class="${state.exploredTab==='mining'?'active':''}">Těžba</button></div>${state.exploredTab==='mining'?miningMarkup():state.exploredTab==='scanner'?scannerMarkup():state.exploredTab==='expansion'?expansionMarkup():`<div class="explored-tools"><button data-explored="refresh" ${d.busy||state.writing?'disabled':''}>Načíst / obnovit</button><button data-explored="cancel" ${d.busy?'':'disabled'}>Zrušit načítání</button><button data-explored="return" ${debugTools.canReturn?'':'disabled'}>Vrátit kameru</button>
     <label>Hledat <input id="explored-query" type="search" value="${esc(d.query)}" placeholder="název nebo ID"></label><label>Zobrazit <select id="explored-filter">${[['all','Vše'],['stations','Se stanicí'],['miners','S minery'],['empty','Bez stanice a minerů']].map(([id,label])=>`<option value="${id}" ${d.filter===id?'selected':''}>${label}</option>`).join('')}</select></label><label>Řadit <select id="explored-sort">${[['name','Název'],['stations','Počet stanic'],['miners','Počet minerů'],['upgrade','Upgrade (nejvyšší tier)']].map(([id,label])=>`<option value="${id}" ${d.sort===id?'selected':''}>${label}</option>`).join('')}</select></label><select id="explored-direction" aria-label="Směr řazení"><option value="asc" ${d.direction==='asc'?'selected':''}>Vzestupně</option><option value="desc" ${d.direction==='desc'?'selected':''}>Sestupně</option></select></div>
     <div class="status" role="status">${esc(d.error||d.notice)} ${d.busy?`Ověřeno ${d.progress}/${d.total}.`:''}</div>
     <div class="explored-body"><p>Kliknutí na název přesune kameru. Počty zahrnují všechny stavby, které server pro daný systém zpřístupní, včetně cizích. Neověřené údaje neznamenají prázdný systém.</p>
     <div class="table"><table><thead><tr><th>Systém</th><th><button data-explored-sort="stations">Stanice ↕</button></th><th><button data-explored-sort="miners">Mineři ↕</button></th><th><button data-explored-sort="upgrade">Upgrade ↕</button></th><th>Ověření</th></tr></thead><tbody id="explored-rows">${exploredRows(p.rows)}</tbody></table></div></div>
     <footer><span id="explored-page">${p.total} výsledků · strana ${p.index+1}/${p.pages}</span><div><button data-explored="prev" ${p.index?'':'disabled'}>Předchozí</button><button data-explored="next" ${p.index+1<p.pages?'':'disabled'}>Další</button></div></footer>`}`;
   }
-  function exploredRows(rows){return rows.map(row=>`<tr><td><button class="system-link" data-explored-system="${esc(row.id)}" ${row.system?'':'disabled'}>${esc(row.name)}</button><small>${esc(row.id)}</small></td><td>${exploredCounts(row,'stations')}</td><td>${exploredCounts(row,'miners')}</td><td>${row.upgradeTier==null||row.error?'neověřeno':row.upgradeTier?'T'+row.upgradeTier:'—'}<small>Stanice ${row.stationTier==null?'?':row.stationTier?'T'+row.stationTier:'—'} · mineři ${row.minerTier==null?'?':row.minerTier?'T'+row.minerTier:'—'}</small></td><td>${esc(row.error||row.checkedAt||'čeká na načtení')}${row.unknown?` · ${row.unknown} neznámých typů staveb`:''}</td></tr>`).join('')||'<tr><td colspan="5">Žádné výsledky.</td></tr>'}
+  function exploredRows(rows){return rows.map(row=>`<tr><td><button class="system-link" data-explored-system="${esc(row.id)}" ${row.system?'':'disabled'}>${esc(row.name)}</button><button data-mining-system="${esc(row.id)}" title="Porovnat těžbu v systému">Těžba</button><small>${esc(row.id)}</small></td><td>${exploredCounts(row,'stations')}</td><td>${exploredCounts(row,'miners')}</td><td>${row.upgradeTier==null||row.error?'neověřeno':row.upgradeTier?'T'+row.upgradeTier:'—'}<small>Stanice ${row.stationTier==null?'?':row.stationTier?'T'+row.stationTier:'—'} · mineři ${row.minerTier==null?'?':row.minerTier?'T'+row.minerTier:'—'}</small></td><td>${esc(row.error||row.checkedAt||'čeká na načtení')}${row.unknown?` · ${row.unknown} neznámých typů staveb`:''}</td></tr>`).join('')||'<tr><td colspan="5">Žádné výsledky.</td></tr>'}
   function expansionMarkup(){
     const d=expansionAdvisor.state,origin=state.view?.station?.system||debugTools.currentSystemId();
     return `<div class="explored-tools"><p>Výchozí systém: ${esc(origin||'vyber stanici nebo otevři systém na mapě')}. Hledá se nejvýše 120 kandidátů; neprozkoumané mají přednost.</p>
@@ -1275,7 +1396,7 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
     <div class="status" role="status">${esc(d.error||d.notice)} ${d.busy?`Ověřeno ${d.progress}/${d.total} · ${esc({loading:'Načítání podkladů',map:'Hledání okolí',structures:'Ověření staveb',resources:'Porovnání ložisek'}[d.phase]||d.phase)}`:''}</div>
     <div class="explored-body"><p>Neprozkoumané: nejdřív průzkum lodí, potom stavba a těžba. Skóre zvýhodňuje suroviny, které podle generátoru chybí ve výchozím systému, jejich rozmanitost a bohatost. Vyšší tier suroviny vyžaduje odpovídající miner. Neověřuje se dosah lodě, vyčerpání ani volné místo pro stavbu.</p>
     ${d.at?`<p>Hledáno kolem ${esc(d.origin?.name)} · ${d.radius} ly · nalezeno ${d.nearby}, prověřeno ${d.total}${d.limited?' (omezený výběr 120)':''}. Vyřazeno: těžba ${d.excluded.mined}, cizí/nejistá stanice ${d.excluded.occupied}, neověřené ${d.excluded.unknown}, nevhodné suroviny ${d.excluded.unsuitable}. Stav k ${esc(d.at)}.</p>`:''}
-    ${d.rows.map((row,i)=>`<section class="sect"><button class="system-link" data-explored-source="expansion" data-explored-system="${esc(row.id)}">${i+1}. ${esc(row.name)}</button><small>${esc(row.id)} · ${fmt(row.distance)} ly · skóre ${fmt(row.score)}</small><p>${row.scouted?'Prozkoumaný, bez minerů':'Neprozkoumaný kandidát k průzkumu'} · ${row.built.ownStations?'vlastní stanice bez těžby':'server nevrátil stanici ani minery'}</p><p>Suroviny (generátor): ${esc(row.resources.map(item).join(', '))}</p><p>Navíc proti výchozímu systému: ${esc(row.newResources.map(item).join(', ')||'žádné nové druhy')} · průměrná bohatost ${fmt(row.richness)}. Stavby ověřeny ${esc(row.checkedAt)}.</p></section>`).join('')||'<p>Zatím žádné doporučené systémy. Spusť hledání nebo změň okolí či požadovanou surovinu.</p>'}</div>`;
+    ${d.rows.map((row,i)=>`<section class="sect"><button class="system-link" data-explored-source="expansion" data-explored-system="${esc(row.id)}">${i+1}. ${esc(row.name)}</button><button data-mining-system="${esc(row.id)}" title="Porovnat těžbu v systému">Těžba</button><small>${esc(row.id)} · ${fmt(row.distance)} ly · skóre ${fmt(row.score)}</small><p>${row.scouted?'Prozkoumaný, bez minerů':'Neprozkoumaný kandidát k průzkumu'} · ${row.built.ownStations?'vlastní stanice bez těžby':'server nevrátil stanici ani minery'}</p><p>Suroviny (generátor): ${esc(row.resources.map(item).join(', '))}</p><p>Navíc proti výchozímu systému: ${esc(row.newResources.map(item).join(', ')||'žádné nové druhy')} · průměrná bohatost ${fmt(row.richness)}. Stavby ověřeny ${esc(row.checkedAt)}.</p></section>`).join('')||'<p>Zatím žádné doporučené systémy. Spusť hledání nebo změň okolí či požadovanou surovinu.</p>'}</div>`;
   }
   function scannerMarkup(){
     const d=galaxyScanner.state,c=d.config,p=galaxyScanner.page();
@@ -1290,23 +1411,35 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
       <div id="scanner-status" class="status" role="status">${esc(d.error||d.notice)} · sektory ${d.sectors}/${d.totalSectors}, systémů ${d.visited}, generováno ${d.generated}, shod ${d.matches}, výsledků ${d.rows.length}.</div>
       <div class="explored-body" id="scanner-results"><p>Ložiska a jejich počáteční velikosti jsou generované. Aktuální zůstatky, dosah lodí a možnost stavby nejsou potvrzené. ${c.onlyIdle?'Výsledky projdou čerstvým ověřením staveb.':'Zobrazuješ všechny generované shody bez ověření těžby; nejde o doporučení k obsazení.'}</p>
       ${d.origin?`<p>Střed výsledku: ${esc(d.origin.name)} (${fmt(d.origin.x)}, ${fmt(d.origin.y)}) · ${d.at?esc(d.at):'hledání běží'}. ${Object.keys(d.limits).length?`Dosažené limity: ${esc(Object.keys(d.limits).map(key=>({sectors:'sektory',systems:'systémy',results:'výsledky'}[key])).join(', '))}. Výběr není úplný ani zaručeně nejbližší.`:''} Chyby generování ${d.failed}; neověřené stavby ${d.verificationFailed}; vyřazeno ${d.excluded}.</p>`:''}
-      ${p.rows.map(row=>`<section class="sect"><button class="system-link" data-explored-source="scanner" data-explored-system="${esc(row.id)}">${esc(row.name)}</button><small>${esc(row.id)} · ${fmt(row.distance)} ly · x ${fmt(row.system.x)}, y ${fmt(row.system.y)} · ${row.scouted?'prozkoumaný':'neprozkoumaný'}</small><p>${row.verification==='idle'?'Server nevrátil minery ani cizí stanici · ověřeno '+esc(row.checkedAt):'Pouze generátor · stavby a těžba neověřené'}</p>${row.planets.filter(planet=>row.matchingPlanets.includes(planet.letter)).map(planet=>`<p>Planeta ${esc(planet.letter)} · bohatost ${fmt(planet.richness)}: ${planet.resources.map(id=>`${esc(item(id))} (počáteční ${fmt(planet.initialUnits[id])} ks)`).join(', ')}</p>`).join('')}</section>`).join('')||'<p>Zatím žádné výsledky. Vyber suroviny a spusť hledání.</p>'}</div>
+      ${p.rows.map(row=>`<section class="sect"><button class="system-link" data-explored-source="scanner" data-explored-system="${esc(row.id)}">${esc(row.name)}</button><button data-mining-system="${esc(row.id)}" title="Porovnat těžbu v systému">Těžba</button><small>${esc(row.id)} · ${fmt(row.distance)} ly · x ${fmt(row.system.x)}, y ${fmt(row.system.y)} · ${row.scouted?'prozkoumaný':'neprozkoumaný'}</small><p>${row.verification==='idle'?'Server nevrátil minery ani cizí stanici · ověřeno '+esc(row.checkedAt):'Pouze generátor · stavby a těžba neověřené'}</p>${row.planets.filter(planet=>row.matchingPlanets.includes(planet.letter)).map(planet=>`<p>Planeta ${esc(planet.letter)} · bohatost ${fmt(planet.richness)}: ${planet.resources.map(id=>`${esc(item(id))} (počáteční ${fmt(planet.initialUnits[id])} ks)`).join(', ')}</p>`).join('')}</section>`).join('')||'<p>Zatím žádné výsledky. Vyber suroviny a spusť hledání.</p>'}</div>
       <footer id="scanner-footer">${p.total} výsledků · strana ${p.index+1}/${p.pages}<div><button data-explored="scanPrev" ${p.index?'':'disabled'}>Předchozí</button><button data-explored="scanNext" ${p.index+1<p.pages?'':'disabled'}>Další</button></div></footer>`;
   }
   function scannerCenter(){
     if(state.scannerOriginMode==='point')return {x:String(state.scannerX).trim()===''?NaN:Number(state.scannerX),y:String(state.scannerY).trim()===''?NaN:Number(state.scannerY)};
     return {systemId:state.scannerOriginMode==='id'?state.scannerOriginId.trim():state.scannerOriginMode==='map'?debugTools.currentSystemId():state.view?.station?.system||''};
   }
+  function miningMarkup(){
+    const d=miningOptimizer.state,s=d.snapshot,c=d.config,disabled=d.busy?'disabled':'',opts=(list,value)=>list.map(([id,label])=>`<option value="${esc(id)}" ${id===value?'selected':''}>${esc(label)}</option>`).join('');
+    const hours=seconds=>seconds===null?'neověřeno':seconds<60?'pod 1 min':fmt(seconds/3600)+' h';
+    return `<div class="scanner-controls"><div class="explored-tools"><label>ID systému <input id="mining-system" value="${esc(d.input)}" placeholder="sx.sy.cell" ${disabled}></label><button data-explored="loadMining" ${disabled||state.writing?'disabled':''}>Načíst ID</button><button data-explored="miningStation" ${disabled||!state.view?'disabled':''}>Vybraná stanice</button><button data-explored="miningMap" ${disabled}>Systém mapy</button><button data-explored="cancelMining" ${d.busy?'':'disabled'}>Zrušit</button>
+    <label>Cílová surovina <select data-mining-config="target" ${disabled}><option value="">Součet ks/min</option>${opts(Object.keys(GAME.items).filter(id=>GAME.items[id].c==='raw').map(id=>[id,item(id)]),c.target)}</select></label><label>Rozdělení <select data-mining-config="mode" ${disabled}>${opts([['even','Rovnoměrně'],['focus','Zaměřit cílovou surovinu']],c.mode)}</select></label><label>Podíl cíle (%) <input data-mining-config="share" type="number" min="0" max="100" step="1" value="${esc(c.share)}" ${disabled}></label><label>Min. životnost (h) <input data-mining-config="minHours" type="number" min="0" max="87600" value="${esc(c.minHours)}" ${disabled}></label><label>Miner <select data-mining-config="specId" ${disabled}><option value="">Porovnat všechny modely</option>${opts((s?.specs||[]).map(spec=>[spec.id,`${spec.name} · T${spec.tier}`]),c.specId)}</select></label><button data-explored="recalculateMining" ${disabled||!s?'disabled':''}>Přepočítat simulaci</button><button data-explored="exportMining" ${s?'':'disabled'}>Export JSON</button></div></div>
+    <div id="mining-status" class="status" role="status">${esc(d.error||d.notice)}</div><div id="mining-results" class="explored-body">${s?`<p><button class="system-link" data-explored-source="mining" data-explored-system="${esc(s.system.id)}">${esc(s.system.name)}</button> · ${esc(s.system.id)} · stav k ${esc(s.at)} · průzkum ${s.scouted===null?'neověřený':s.scouted?'ano':'ne'}. Stavby ${s.structuresVerified?'ověřené':'neověřené'}, zůstatky ${s.depletionVerified?'ověřené podle serveru':'neověřené'}.</p>
+      <section class="sect"><b>Nejlepší podmíněná varianta pro zvolené filtry</b>${s.best?`<p>Planeta ${esc(s.best.planet)} · ${esc(s.best.name)} (T${s.best.tier}) · ${fmt(s.best.rate)} ks/min · ${esc(s.best.reason)}.</p>`:'<p>Žádná vhodná ověřená varianta. Zkontroluj cíl, obsazení a podmínku životnosti.</p>'}<p>Pořadí vychází z nominálního výkonu; neověřuje výzkum, inventář, stavitelnost ani skutečný odběr. Nižší tiery a cizí/nejisté obsazení se nedoporučují jako upgrade.</p></section>
+      ${s.warnings.map(w=>`<p class="warning">${esc(w)}</p>`).join('')}
+      <div class="table"><table><thead><tr><th>Planeta / miner</th><th>Výkon cíle</th><th>Současné rozdělení</th><th>Rozdíl</th><th>Nejdřívější vyčerpání</th><th>Posouzení</th></tr></thead><tbody>${s.rows.map(row=>`<tr><td>${esc(row.planet)} · ${esc(row.name)}<br>T${row.tier} · bohatost ${fmt(row.richness)} · spotřeba ložiska ${fmt(row.drain)}</td><td>${fmt(row.rate)} ks/min</td><td>${row.currentRate===null?'neověřeno':fmt(row.currentRate)+' ks/min'}</td><td>${row.gain===null?'neověřeno':fmt(row.gain)+' ks/min'}</td><td>${row.minimumHours===null?'neověřeno / bez výkonu':fmt(row.minimumHours)+' h'}<br>${row.durationPass?'splňuje filtr':'nesplňuje / neověřeno'}</td><td>${row.eligible?'Podmíněný kandidát':'Pouze porovnání'}<br>${esc(row.reason)}</td></tr>`).join('')}</tbody></table></div>
+      ${s.planets.map(planet=>`<section class="sect"><b>Planeta ${esc(planet.letter)} · ${esc(planet.name)}</b><p>Stav: ${esc({free:'bez minerů podle serveru',own:'vlastní miner',foreign:'cizí miner',multiple:'více minerů',unknown:'neověřeno'}[planet.occupancy])}. ${planet.current.map(m=>`${esc(m.building)}: ${m.known?'aktuální nastavený podíl '+esc(JSON.stringify(m.split)):esc(m.error)}`).join(' · ')}</p>
+      ${s.rows.filter(row=>row.planet===planet.letter).map(row=>`<details><summary>${esc(row.name)} · T${row.tier} · ${fmt(row.rate)} ks/min</summary><div class="table"><table><thead><tr><th>Surovina</th><th>Stav</th><th>Podíl</th><th>ks/min</th><th>Počáteční / zůstatek</th><th>Max. získatelné</th><th>Min. doba</th></tr></thead><tbody>${row.resources.map(resource=>`<tr><td>${esc(item(resource.id))}</td><td>${!resource.mineable?'tier mineru nestačí':resource.exhausted?'vyčerpané':'nominální'}</td><td>${resource.share}%</td><td>${fmt(resource.rate)}</td><td>${fmt(resource.initialUnits)} / ${resource.remaining===null?'neověřeno':fmt(resource.remaining)}</td><td>${resource.maximumOutput===null?'neověřeno':fmt(resource.maximumOutput)}</td><td>${hours(resource.minimumSeconds)}</td></tr>`).join('')}</tbody></table></div></details>`).join('')}</section>`).join('')}`:'<p>Načti systém. Porovnávají se planety a aktuální herní modely minerů; rozdělení výkonu se mění pouze v simulaci.</p>'}</div>`;
+  }
   function bindExploredLinks(win){win.querySelectorAll('[data-explored-system]').forEach(b=>b.addEventListener('click',()=>{
-    const rows=b.dataset.exploredSource==='scanner'?galaxyScanner.state.rows:b.dataset.exploredSource==='expansion'?expansionAdvisor.state.rows:exploredSystems.state.rows;
+    const rows=b.dataset.exploredSource==='mining'&&miningOptimizer.state.snapshot?[{...miningOptimizer.state.snapshot.system,system:miningOptimizer.state.snapshot.system}]:b.dataset.exploredSource==='scanner'?galaxyScanner.state.rows:b.dataset.exploredSource==='expansion'?expansionAdvisor.state.rows:exploredSystems.state.rows;
     const row=rows.find(row=>row.id===b.dataset.exploredSystem);
-    try{if(!row?.system)throw Error('Systém není ověřen');debugTools.cameraToKnownSystem(row.system,{leaveStation:true});exploredSystems.state.error='';exploredSystems.state.notice='Kamera přesunuta na '+row.name;expansionAdvisor.state.error='';galaxyScanner.state.error=''}catch(e){if(state.exploredTab==='scanner')galaxyScanner.state.error=e.message;else if(state.exploredTab==='expansion')expansionAdvisor.state.error=e.message;else exploredSystems.state.error=e.message}renderExplored();
+    try{if(!row?.system)throw Error('Systém není ověřen');debugTools.cameraToKnownSystem(row.system,{leaveStation:true});exploredSystems.state.error='';exploredSystems.state.notice='Kamera přesunuta na '+row.name;expansionAdvisor.state.error='';galaxyScanner.state.error='';miningOptimizer.state.error=''}catch(e){if(state.exploredTab==='mining')miningOptimizer.state.error=e.message;else if(state.exploredTab==='scanner')galaxyScanner.state.error=e.message;else if(state.exploredTab==='expansion')expansionAdvisor.state.error=e.message;else exploredSystems.state.error=e.message}renderExplored();
   }))}
   function renderExplored(){
     const win=state.root?.getElementById('explored-window');if(!win)return;win.hidden=!state.exploredOpened;if(!state.exploredOpened)return;
     const minimizedButton=win.querySelector('[data-explored="minimize"]');
     if(state.exploredMinimized&&minimizedButton?.getAttribute?.('aria-expanded')==='false'){
-      const subtitle=win.querySelector('header small');if(subtitle)subtitle.textContent=galaxyScanner.state.busy?`Scanner běží · ${galaxyScanner.state.visited} systémů`:galaxyScanner.state.at?`Scanner · ${galaxyScanner.state.rows.length} shod`:`Serverový průzkum · ${exploredSystems.state.total} systémů`;return;
+      const subtitle=win.querySelector('header small');if(subtitle)subtitle.textContent=miningOptimizer.state.busy?'Těžba · načítám systém…':state.exploredTab==='mining'&&miningOptimizer.state.snapshot?'Těžba · '+miningOptimizer.state.snapshot.rows.length+' variant':galaxyScanner.state.busy?`Scanner běží · ${galaxyScanner.state.visited} systémů`:galaxyScanner.state.at?`Scanner · ${galaxyScanner.state.rows.length} shod`:`Serverový průzkum · ${exploredSystems.state.total} systémů`;return;
     }
     // Scanner progress updates must not replace controls between pointerdown and click.
     const scannerStatus=win.querySelector('#scanner-status');
@@ -1331,6 +1464,16 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
     for(const [id,key] of [['explored-sort','sort'],['explored-direction','direction']])win.querySelector('#'+id)?.addEventListener('change',e=>{exploredSystems.state[key]=e.target.value;exploredSystems.state.page=0;renderExplored()});
     win.querySelectorAll('[data-explored-sort]').forEach(b=>b.addEventListener('click',()=>{const d=exploredSystems.state,key=b.dataset.exploredSort;d.direction=d.sort===key&&d.direction==='desc'?'asc':'desc';d.sort=key;d.page=0;renderExplored()}));
     for(const [id,key] of [['expansion-radius','radius'],['expansion-wanted','wanted']])win.querySelector('#'+id)?.addEventListener('change',e=>{expansionAdvisor.invalidate();expansionAdvisor.state[key]=e.target.value;renderExplored()});bindExploredLinks(win);
+    win.querySelectorAll('[data-mining-system]').forEach(b=>b.addEventListener('click',async()=>{if(state.writing)return;state.exploredTab='mining';miningOptimizer.invalidate(false);miningOptimizer.state.input=b.dataset.miningSystem;renderExplored();await miningOptimizer.refresh()}));
+    win.querySelector('#mining-system')?.addEventListener('input',e=>{miningOptimizer.state.input=e.target.value;miningOptimizer.invalidate(false);const result=win.querySelector('#mining-results');if(result)result.hidden=true;const status=win.querySelector('#mining-status');if(status)status.textContent=miningOptimizer.state.notice;for(const name of ['exportMining','recalculateMining']){const button=win.querySelector('[data-explored="'+name+'"]');if(button)button.disabled=true}});
+    win.querySelectorAll('[data-mining-config]').forEach(input=>input.addEventListener(input.tagName==='SELECT'?'change':'input',e=>{
+      if(miningOptimizer.state.busy)return;miningOptimizer.state.config[input.dataset.miningConfig]=e.target.value;
+      if(input.tagName==='SELECT'){miningOptimizer.recalculate();return}
+      miningOptimizer.recalculate(false);const result=win.querySelector('#mining-results');if(result)result.hidden=true;
+      const status=win.querySelector('#mining-status');if(status)status.textContent=miningOptimizer.state.error||'Volby změněny. Zobraz výsledek tlačítkem Přepočítat simulaci.';
+      const exportButton=win.querySelector('[data-explored="exportMining"]');if(exportButton)exportButton.disabled=true;
+      const recalc=win.querySelector('[data-explored="recalculateMining"]');if(recalc)recalc.disabled=!miningOptimizer.state.snapshot;
+    }));
     win.querySelector('#scanner-origin-mode')?.addEventListener('change',e=>{galaxyScanner.invalidate();state.scannerOriginMode=e.target.value;renderExplored()});
     for(const [id,key] of [['scanner-origin-id','scannerOriginId'],['scanner-x','scannerX'],['scanner-y','scannerY']])win.querySelector('#'+id)?.addEventListener('input',e=>{state[key]=e.target.value;invalidateScannerInput(win)});
     win.querySelectorAll('[data-scanner-value]').forEach(input=>input.addEventListener(input.tagName==='SELECT'?'change':'input',e=>{galaxyScanner.state.config[input.dataset.scannerValue]=e.target.value;if(input.tagName==='SELECT')galaxyScanner.invalidate();else invalidateScannerInput(win)}));
@@ -1346,21 +1489,25 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
   }
   async function exploredAction(name){
     if(name==='minimize'){state.exploredMinimized=!state.exploredMinimized;save();renderExplored();return}
+    if(['loadMining','miningStation','miningMap'].includes(name)){if(!state.writing)await miningOptimizer.refresh(name==='miningStation'?state.view?.station?.system:name==='miningMap'?debugTools.currentSystemId():miningOptimizer.state.input);return}
+    if(name==='cancelMining'){miningOptimizer.cancel();return}
+    if(name==='recalculateMining'){miningOptimizer.recalculate();return}
+    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'0.7.0',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
     if(name==='scan'){if(!state.writing)await galaxyScanner.search({center:scannerCenter()});return}
     if(name==='cancelScan'){galaxyScanner.cancel();return}
     if(name==='scanPrev'||name==='scanNext'){galaxyScanner.state.page+=name==='scanPrev'?-1:1;renderExplored();return}
-    if(name==='exportScan'){download({version:'0.6.0',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
-    if(['tabList','tabExpansion','tabScanner'].includes(name)){state.exploredTab=name==='tabList'?'list':name==='tabScanner'?'scanner':'expansion';renderExplored();return}
+    if(name==='exportScan'){download({version:'0.7.0',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
+    if(['tabList','tabExpansion','tabScanner','tabMining'].includes(name)){state.exploredTab=name==='tabList'?'list':name==='tabScanner'?'scanner':name==='tabMining'?'mining':'expansion';renderExplored();return}
     if(name==='searchExpansion'){if(!state.writing)await expansionAdvisor.search({originId:state.view?.station?.system||debugTools.currentSystemId()});return}
     if(name==='cancelExpansion'){expansionAdvisor.cancel();return}
-    if(name==='close'){state.exploredOpened=false;galaxyScanner.cancel();expansionAdvisor.cancel();exploredSystems.cancel();renderExplored();return}
+    if(name==='close'){state.exploredOpened=false;miningOptimizer.cancel();galaxyScanner.cancel();expansionAdvisor.cancel();exploredSystems.cancel();renderExplored();return}
     if(name==='cancel'){exploredSystems.cancel();return}
     if(name==='refresh'){if(!state.writing){expansionAdvisor.invalidate();await exploredSystems.refresh();}return}
-    if(name==='return'){const target=state.exploredTab==='scanner'?galaxyScanner.state:state.exploredTab==='expansion'?expansionAdvisor.state:exploredSystems.state;try{debugTools.returnCamera();target.error=''}catch(e){target.error=e.message}}
+    if(name==='return'){const target=state.exploredTab==='mining'?miningOptimizer.state:state.exploredTab==='scanner'?galaxyScanner.state:state.exploredTab==='expansion'?expansionAdvisor.state:exploredSystems.state;try{debugTools.returnCamera();target.error=''}catch(e){target.error=e.message}}
     if(name==='prev')exploredSystems.state.page--;if(name==='next')exploredSystems.state.page++;renderExplored();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.6.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.7.0 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
@@ -1370,14 +1517,14 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
     const tabs=[['summary','Přehled'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['debug','Debug'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.6.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v0.7.0 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><button data-act="exploredOpen" title="Samostatné okno prozkoumaných systémů">Systémy</button><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
      <div class="tabs">${tabs.map(([id,label])=>`<button data-tab="${id}" ${state.tab===id?'class="active"':''}>${label}</button>`).join('')}</div>
      <main>${({summary,resources,galaxy,production,proposals,account:accountMenu,advisor:advisorMenu,debug:debugMenu,diag:diagnostics}[state.tab]||summary)()}</main>
      <footer>All Out of Space · ${state.processing?'Probíhá operace':'Připraveno'} <button data-act="exportPlan">Export návrhů</button></footer>`;
-    panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;expansionAdvisor.invalidate();galaxyScanner.invalidate();state.view=null;state.plan=[];state.selected.clear();loadView()});
+    panel.querySelector('#station').addEventListener('change',e=>{if(state.processing)return;state.stationId=e.target.value;expansionAdvisor.invalidate();galaxyScanner.invalidate();miningOptimizer.invalidate();state.view=null;state.plan=[];state.selected.clear();loadView()});
     panel.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click',()=>{state.tab=b.dataset.tab;render()}));
     panel.querySelectorAll('[data-act]').forEach(b=>b.addEventListener('click',()=>action(b.dataset.act)));
     panel.querySelectorAll('[data-plan]').forEach(b=>b.addEventListener('change',()=>{if(state.processing)return;b.checked?state.selected.add(b.dataset.plan):state.selected.delete(b.dataset.plan);render()}));
@@ -1413,7 +1560,7 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
     panel.querySelectorAll('[data-account]').forEach(b=>b.addEventListener('click',()=>accountAction(b.dataset.account)));
     panel.querySelectorAll('[data-account-open]').forEach(b=>b.addEventListener('click',()=>{
       if(state.processing||accountOverview.state.busy||progressAdvisor.state.busy)return;
-      state.stationId=b.dataset.accountOpen;expansionAdvisor.invalidate();galaxyScanner.invalidate();state.view=null;state.plan=[];state.selected.clear();state.tab='summary';loadView();
+      state.stationId=b.dataset.accountOpen;expansionAdvisor.invalidate();galaxyScanner.invalidate();miningOptimizer.invalidate();state.view=null;state.plan=[];state.selected.clear();state.tab='summary';loadView();
     }));
     panel.querySelector('#account-filter')?.addEventListener('input',e=>{
       accountOverview.state.query=e.target.value;const query=e.target.value.toLocaleLowerCase('cs-CZ');
@@ -1431,7 +1578,7 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
     if(name==='addRequest'||name==='addExport'){addDraft(name==='addRequest'?'request':'export',state.root?.getElementById('panel')?.querySelector('#draft-item')?.value);render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.6.0',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
+    if(name==='exportPlan'){download({version:'0.7.0',at:new Date().toISOString(),station:state.stationId,settings:{importStacks:5,exportStacks:10},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,priority:p.priority,group:p.existing?.group??p.group,risk:p.risk,error:p.error}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -1464,6 +1611,7 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
       #explored-window{pointer-events:auto;position:fixed;z-index:2;left:25px;top:100px;width:min(800px,calc(100vw - 16px));height:480px;min-width:min(320px,calc(100vw - 16px));min-height:min(260px,calc(100vh - 16px));max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);resize:both;overflow:hidden;display:flex;flex-direction:column;background:#101d27;color:#e6f3fa;border:1px solid #527d8f;border-radius:12px;font:12px/1.45 system-ui;box-shadow:0 15px 45px #000b}
       #explored-window[hidden]{display:none}#explored-window header button{display:grid;place-items:center;padding:0;font:24px/1 Arial,sans-serif}#explored-window .explored-body{flex:1;min-height:80px;overflow:auto;padding:10px}#explored-window .explored-tools{display:flex;flex-wrap:wrap;gap:6px;padding:8px}#explored-window label{display:flex;align-items:center;gap:5px}#explored-window input,#explored-window select{max-width:220px;background:#182e3b;color:#fff;border:1px solid #587080;padding:5px;border-radius:5px}#explored-window button[data-explored],#explored-window .system-link{background:#21586a;color:#e4faff;border:1px solid #3b91a0;border-radius:5px;padding:5px 7px}#explored-window .system-link{text-align:left;text-decoration:underline;background:transparent;border:0;color:#8bdcef;padding:0}#explored-window td small{display:block;color:#afc6d1}#explored-window .tabs button[data-explored]{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:#b5c8d5}#explored-window .tabs button.active{color:#fff;border-bottom-color:#61c2d7}#explored-window button[data-explored-sort]{background:transparent;border:0;color:#b5e6ed;font-weight:bold;padding:0}#explored-window .sect small{display:block;color:#a9c7d2;margin:5px 0}#explored-window header{flex-shrink:0}#explored-window footer{gap:5px}
       #explored-window.minimized{height:auto!important;min-height:0;max-height:none;resize:none}#explored-window.minimized>:not(header){display:none!important}#explored-window header>div:first-child{min-width:0;overflow:hidden}#explored-window header b,#explored-window header small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#explored-window .window-controls{display:flex;gap:5px;flex-shrink:0}.scanner-controls{max-height:45%;overflow:auto;flex-shrink:0}.scanner-resources{display:flex;flex-wrap:wrap;gap:6px;padding:8px;max-height:135px;overflow:auto;flex-shrink:0}.scanner-resources label{min-width:140px;font-size:11px}#explored-window [data-scanner-value]{max-width:190px}#explored-window input[type="number"]{width:110px}
+      #explored-window button[data-mining-system]{background:#21586a;color:#e4faff;border:1px solid #3b91a0;border-radius:5px;padding:3px 6px;margin-left:6px}#mining-results details{margin:7px 0}#mining-results summary{cursor:pointer;color:#8bdcef}
       @media(max-width:670px){#panel{top:8px;left:8px!important;right:auto!important;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}.metrics{grid-template-columns:repeat(2,1fr)}}`;
     const fab=document.createElement('button');fab.id='fab';fab.textContent='AOS';fab.title='AOS Toolkit · přesuň tažením';state.fabMover=makeMovableButton(fab,{getPosition:()=>state.fabPosition,setPosition:p=>{state.fabPosition=p},viewport:()=>({width:innerWidth,height:innerHeight}),save});fab.addEventListener('click',()=>{state.opened=true;render();if(!state.loaded)loadStations()});
     const panel=document.createElement('section');panel.id='panel';panel.hidden=true;
@@ -1493,8 +1641,8 @@ function createGalaxyScanner({api,catalog,loadRules,summarizeStructures,systemLa
   }
   document.addEventListener('spacefactory:auth',e=>{
     if(e.detail?.profile)return;
-    state.exploredOpened=false;galaxyScanner.invalidate();expansionAdvisor.invalidate();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
+    state.exploredOpened=false;miningOptimizer.invalidate();galaxyScanner.invalidate();expansionAdvisor.invalidate();exploredSystems.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.querySerial++;state.stations=[];state.stationId='';state.view=null;state.plan=[];state.selected.clear();state.loaded=false;state.processing=state.writing;render();
   });
-  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{exploredSystems.stale();expansionAdvisor.invalidate();galaxyScanner.invalidate()});
+  for(const event of ['spacefactory:scouting','spacefactory:structures'])document.addEventListener(event,()=>{exploredSystems.stale();expansionAdvisor.invalidate();galaxyScanner.invalidate();miningOptimizer.invalidate()});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',mount,{once:true});else mount();
 })();
