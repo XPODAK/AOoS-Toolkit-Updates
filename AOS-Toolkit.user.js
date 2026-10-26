@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AOS Toolkit - All Out of Space
 // @namespace    https://alloutofspace.com/
-// @version      1.3.2
+// @version      1.3.3
 // @description  Game JS Update Analyzer, Production Coverage and Unified Advisor (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
@@ -1273,7 +1273,7 @@ function migrateToolkitStorage(raw,{source='current',legacyPosition=null}={}){
   try{if(typeof raw==='string')value=JSON.parse(raw)}catch{value=null;canSave=source==='legacy';warnings.push('Uložený JSON je neplatný; originál nebyl přepsán.')}
   if(value!==null&&value!==undefined&&!record(value)){value=null;canSave=source==='legacy';warnings.push('Neplatný formát nastavení.')}
   if(record(value)&&value.schemaVersion!==undefined&&value.schemaVersion!==1){canSave=false;warnings.push('Neznámá verze nastavení; ukládání je vypnuté a originál zůstává zachovaný.');value=null}
-  const data={schemaVersion:1,defaultsRevision:2,toolkitVersion:'1.3.2',settings:{...TOOLKIT_DEFAULTS},exploredMinimized:false};
+  const data={schemaVersion:1,defaultsRevision:2,toolkitVersion:'1.3.3',settings:{...TOOLKIT_DEFAULTS},exploredMinimized:false};
   if(record(value?.settings)){
     for(const [k,min,max] of [['importStacks',1,10000],['exportStacks',1,10000],['priority',0,100]])if(Number.isSafeInteger(value.settings[k])&&value.settings[k]>=min&&value.settings[k]<=max)data.settings[k]=value.settings[k];
     if(typeof value.settings.includeCraftedExports==='boolean')data.settings.includeCraftedExports=value.settings.includeCraftedExports;
@@ -1564,10 +1564,11 @@ async function readPublicGameSource(path,{fetchImpl=fetch,maxBytes=1048576}={}){
   }finally{clearTimeout(timer)}
 }
 function makeSourceZip(snapshot){
-  if(!snapshot||!Array.isArray(snapshot.files))throw Error('Chybí snímek zdrojů.');
+  if(!snapshot||!Array.isArray(snapshot.files)||!Array.isArray(snapshot.changed)||!Array.isArray(snapshot.added))throw Error('Chybí snímek zdrojů nebo seznam změn.');
+  const selected=new Set([...snapshot.changed,...snapshot.added]),archived=[];
   const encode=s=>new TextEncoder().encode(s),crc32=bytes=>{let c=0xffffffff;for(const b of bytes){c^=b;for(let i=0;i<8;i++)c=(c>>>1)^((c&1)?0xedb88320:0)}return (c^0xffffffff)>>>0};
-  const entries=[],seen=new Set();for(const file of snapshot.files){if(sourcePath(file.path)!==file.path||seen.has(file.path)||typeof file.text!=='string')throw Error('Neplatný soubor snímku.');seen.add(file.path);entries.push({name:'references/game-source'+file.path,data:encode(file.text)})}
-  const manifest={...snapshot,files:snapshot.files.map(({text,...meta})=>meta),normalization:'strip UTF-8 BOM, CRLF/CR to LF before SHA-256',warning:'Public source text only; partial snapshots retain explicit failures. Do not auto-accept as a compatibility baseline.'};
+  const entries=[],seen=new Set();for(const file of snapshot.files){if(sourcePath(file.path)!==file.path||seen.has(file.path)||typeof file.text!=='string')throw Error('Neplatný soubor snímku.');seen.add(file.path);if(selected.has(file.path)){archived.push(file.path);entries.push({name:'references/game-source'+file.path,data:encode(file.text)})}}
+  const manifest={...snapshot,archiveMode:'changes-only',archived,files:snapshot.files.map(({text,...meta})=>meta),normalization:'strip UTF-8 BOM, CRLF/CR to LF before SHA-256',warning:'Delta archive: unchanged source files are omitted; files lists metadata for all successfully checked sources. Partial snapshots retain explicit failures. Do not auto-accept as a compatibility baseline.'};
   entries.push({name:'source-snapshot.json',data:encode(JSON.stringify(manifest,null,2))});if(entries.length>257)throw Error('Překročen počet souborů ZIP.');
   let offset=0,total=0;const local=[],central=[];
   for(const entry of entries){const name=encode(entry.name),data=entry.data,crc=crc32(data),header=new Uint8Array(30+name.length),h=new DataView(header.buffer);h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(6,0x800,true);h.setUint16(12,33,true);h.setUint32(14,crc,true);h.setUint32(18,data.length,true);h.setUint32(22,data.length,true);h.setUint16(26,name.length,true);header.set(name,30);
@@ -1583,11 +1584,11 @@ function createSourceUpdater({manifest,fetchSource,digest,loadPreferences=()=>nu
   const emit=()=>onChange(),save=()=>{try{savePreferences({...prefs})}catch{}};
   function setAuto(on){prefs.autoEnabled=state.autoEnabled=on===true;save();emit()}
   function cancel(){serial++;state.busy=false;state.snapshot=null;state.pendingPrompt=false;state.error='Kontrola zdrojů zrušena.';emit()}
-  function downloadNow(){const s=state.snapshot;if(state.busy||!s?.files.length)return false;state.pendingPrompt=false;prefs.prompted=s.fingerprint;save();try{download(s);return true}catch(e){state.error='Stažení se nepodařilo: '+String(e.message||e);return false}finally{emit()}}
+  function downloadNow(){const s=state.snapshot;if(state.busy||!s?.files.some(f=>s.changed.includes(f.path)||s.added.includes(f.path)))return false;state.pendingPrompt=false;prefs.prompted=s.fingerprint;save();try{download(s);return true}catch(e){state.error='Stažení se nepodařilo: '+String(e.message||e);return false}finally{emit()}}
   function offer(){
     const s=state.snapshot;if(prompting||state.busy||!state.pendingPrompt||!s||!isSafeToPrompt())return false;
     state.pendingPrompt=false;prefs.prompted=s.fingerprint;save();prompting=true;
-    try{const yes=ask(`AOS Toolkit: herní JS se liší od referencí této verze Toolkitu.\nZměněno ${s.changed.length}, nových závislostí ${s.added.length}, chyb ${s.failures.length}.\n${s.complete?'Snímek dostupných známých zdrojů je kompletní.':'Snímek je částečný; neúplnost bude uvedená v balíčku.'}\n\nStáhnout ZIP se zdrojovými JS a kontrolním manifestem?`);if(yes)return downloadNow();return false}
+    try{const yes=ask(`AOS Toolkit: herní JS se liší od referencí této verze Toolkitu.\nZměněno ${s.changed.length}, nových závislostí ${s.added.length}, chyb ${s.failures.length}.\n${s.complete?'Snímek dostupných známých zdrojů je kompletní.':'Snímek je částečný; neúplnost bude uvedená v balíčku.'}\n\nStáhnout ZIP pouze se změněnými a novými JS a kontrolním manifestem?`);if(yes)return downloadNow();return false}
     catch(e){state.error='Stažení se nepodařilo: '+String(e.message||e);return false}finally{prompting=false;emit()}
   }
   async function check({automatic=false}={}){
@@ -1701,7 +1702,7 @@ function createSourceUpdater({manifest,fetchSource,digest,loadPreferences=()=>nu
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'1.3.2',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'1.3.3',at:new Date().toISOString(),station:state.stationId,
     requestsOn:state.view?.requestsOn,exportsOn:state.view?.exportsOn,groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -1994,7 +1995,7 @@ function createSourceUpdater({manifest,fetchSource,digest,loadPreferences=()=>nu
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'1.3.2',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'1.3.3',at:new Date().toISOString(),reference:GAME.version,
       compatibility:journeyAdvisor.state.compatibility,storage:{schema:1,canSave:storageMigration.canSave,warnings:storageMigration.warnings},
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
@@ -2271,8 +2272,8 @@ function createSourceUpdater({manifest,fetchSource,digest,loadPreferences=()=>nu
 <li><b>Vyšší budovy spotřebují předchozí tier:</b> 15 receptů nyní vyžaduje také jeden odpovídající kit nižšího tieru (včetně minerů a výrobních strojů). Tier 2 Assembly Bay je výjimka: bezplatná Tier 1 není inventářová položka.</li>
 <li><b>Request a export:</b> nové requesty standardně nemají Open market, pokud jej nezapne preference. Herní UI ukazuje odhad maximální tržní ceny. Sell excess se vztahuje pouze na market; vlastní stanice a inventář znovu respektují Keep pro daný cíl.</li>
 <li><b>Čísla a datum:</b> Settings → Interface nabízí oddělovače čísel, pořadí dne/měsíce a 12/24hodinový čas; automatická volba následuje prohlížeč. Názvy měsíců zůstávají anglicky.</li>
-<li><b>Inventář:</b> Move in / Move out umožňuje při více než čtyřech stanicích filtrovat podle stanice nebo systému.</li></ul><p><b>Toolkit 1.3.2:</b> nové náklady zahrnují Poradce, výrobní pokrytí, Factory Planner, Market Assistant i plán expanze. Aktualizovány reference, kontrola kompatibility a detekce dalších aktualizací (163 JS). Opraveno vyhodnocení známé rezervy exportu do stanic při Sell excess.</p><p>Proběhly automatické testy a audit klientských rozhraní. Ovládání v živé hře a skutečné odesílání pravidel vyžadují následné uživatelské ověření.</p>`)}
-  function updatesMenu(){const d=sourceUpdater.state;return gameChangesMenu()+wrap(`<b>Update Analyzer · zdroje hry</b><p>Porovná SHA-256 dostupných veřejných JS s ${Object.keys(SOURCE_MANIFEST.files).length} auditovanými referencemi této verze Toolkitu. Najde i přímé statické importy nových souborů. Text pouze čte; stažený kód se nespouští.</p><label class="tick"><input id="updates-auto" type="checkbox" ${d.autoEnabled?'checked':''}> Automatická kontrola po otevření hry, nejvýše jednou za 24 hodin v tomto prohlížeči</label><button data-source-updates="check" ${d.busy?'disabled':''}>Zkontrolovat nyní</button><button data-source-updates="cancel" ${d.busy?'':'disabled'}>Zrušit</button><button data-source-updates="download" ${d.snapshot?.files.length?'':'disabled'}>Stáhnout JS ZIP</button><p id="updates-status" role="status">${esc(sourceUpdateStatus())}</p><p>ZIP obsahuje skutečné načtené soubory v references/game-source a manifest s hashi, změnami a případnou neúplností. Použij jej pro kontrolované doplnění referencí soukromého projektu. Herní pravidla ani baseline kompatibility se automaticky nepřepisují.</p>`)+`<section id="updates-details">${sourceUpdateDetails()}</section>`}
+<li><b>Inventář:</b> Move in / Move out umožňuje při více než čtyřech stanicích filtrovat podle stanice nebo systému.</li></ul><p><b>Toolkit 1.3.3:</b> nové náklady zahrnují Poradce, výrobní pokrytí, Factory Planner, Market Assistant i plán expanze. Aktualizovány reference, kontrola kompatibility a detekce dalších aktualizací (163 JS). Opraveno vyhodnocení známé rezervy exportu do stanic při Sell excess.</p><p>Proběhly automatické testy a audit klientských rozhraní. Ovládání v živé hře a skutečné odesílání pravidel vyžadují následné uživatelské ověření.</p>`)}
+  function updatesMenu(){const d=sourceUpdater.state;return gameChangesMenu()+wrap(`<b>Update Analyzer · zdroje hry</b><p>Porovná SHA-256 dostupných veřejných JS s ${Object.keys(SOURCE_MANIFEST.files).length} auditovanými referencemi této verze Toolkitu. Najde i přímé statické importy nových souborů. Text pouze čte; stažený kód se nespouští.</p><label class="tick"><input id="updates-auto" type="checkbox" ${d.autoEnabled?'checked':''}> Automatická kontrola po otevření hry, nejvýše jednou za 24 hodin v tomto prohlížeči</label><button data-source-updates="check" ${d.busy?'disabled':''}>Zkontrolovat nyní</button><button data-source-updates="cancel" ${d.busy?'':'disabled'}>Zrušit</button><button data-source-updates="download" ${d.snapshot?.files.some(f=>d.snapshot.changed.includes(f.path)||d.snapshot.added.includes(f.path))?'':'disabled'}>Stáhnout JS ZIP</button><p id="updates-status" role="status">${esc(sourceUpdateStatus())}</p><p>ZIP obsahuje pouze změněné a nově nalezené JS v references/game-source. Nezměněné soubory vynechá; manifest zachová hashe všech zkontrolovaných souborů, seznam přiložených cest a případnou neúplnost. Použij jej pro kontrolované doplnění referencí soukromého projektu. Herní pravidla ani baseline kompatibility se automaticky nepřepisují.</p>`)+`<section id="updates-details">${sourceUpdateDetails()}</section>`}
   function bindSourceActions(panel){panel.querySelectorAll('[data-source-updates]').forEach(b=>b.addEventListener('click',()=>sourceUpdateAction(b.dataset.sourceUpdates)))}
   function refreshSourceUpdates(){
     const panel=state.root?.getElementById('panel');if(!panel)return;const d=sourceUpdater.state,auto=panel.querySelector('#updates-auto');if(auto)auto.checked=d.autoEnabled;const status=panel.querySelector('#updates-status');if(status)status.textContent=sourceUpdateStatus();
@@ -2456,15 +2457,15 @@ function createSourceUpdater({manifest,fetchSource,digest,loadPreferences=()=>nu
     if(['loadMining','miningStation','miningMap'].includes(name)){if(!state.writing)await miningOptimizer.refresh(name==='miningStation'?state.view?.station?.system:name==='miningMap'?debugTools.currentSystemId():miningOptimizer.state.input);return}
     if(name==='cancelMining'){miningOptimizer.cancel();return}
     if(name==='recalculateMining'){miningOptimizer.recalculate();return}
-    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'1.3.2',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
+    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'1.3.3',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
     if(name==='scan'){if(!state.writing)await galaxyScanner.search({center:scannerCenter()});return}
     if(name==='cancelScan'){galaxyScanner.cancel();return}
     if(name==='scanPrev'||name==='scanNext'){galaxyScanner.state.page+=name==='scanPrev'?-1:1;renderExplored();return}
-    if(name==='exportScan'){download({version:'1.3.2',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
+    if(name==='exportScan'){download({version:'1.3.3',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
     if(['tabList','tabExpansion','tabScanner','tabMining'].includes(name)){state.exploredTab=name==='tabList'?'list':name==='tabScanner'?'scanner':name==='tabMining'?'mining':'expansion';renderExplored();return}
     if(name==='searchExpansion'){if(expansionAdvisor.state.goalMode==='goal'){await searchGoalExpansion();return}if(!state.writing)await expansionAdvisor.search({originId:state.view?.station?.system||debugTools.currentSystemId()});return}
     if(name==='cancelExpansion'){cancelExpansionWork();renderExplored();return}
-    if(name==='exportExpansion'){download({version:'1.3.2',at:expansionAdvisor.state.at,context:expansionAdvisor.state.context,origin:expansionAdvisor.state.origin,limits:{candidates:expansionAdvisor.state.limited,sites:expansionAdvisor.state.siteLimited},excluded:expansionAdvisor.state.excluded,rows:expansionAdvisor.state.rows},'aos-toolkit-expansion.json');return}
+    if(name==='exportExpansion'){download({version:'1.3.3',at:expansionAdvisor.state.at,context:expansionAdvisor.state.context,origin:expansionAdvisor.state.origin,limits:{candidates:expansionAdvisor.state.limited,sites:expansionAdvisor.state.siteLimited},excluded:expansionAdvisor.state.excluded,rows:expansionAdvisor.state.rows},'aos-toolkit-expansion.json');return}
     if(name==='close'){state.exploredOpened=false;miningOptimizer.cancel();galaxyScanner.cancel();cancelExpansionWork();exploredSystems.cancel();renderExplored();return}
     if(name==='cancel'){exploredSystems.cancel();return}
     if(name==='refresh'){if(!state.writing){invalidateExpansionWork();await exploredSystems.refresh();}return}
@@ -2472,7 +2473,7 @@ function createSourceUpdater({manifest,fetchSource,digest,loadPreferences=()=>nu
     if(name==='prev')exploredSystems.state.page--;if(name==='next')exploredSystems.state.page++;renderExplored();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 1.3.2 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 1.3.3 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-journey="check">Zkontrolovat herní rozhraní</button><p>${esc(storageMigration.warnings.join(" "))}</p><p>Kompatibilita: ${esc(journeyAdvisor.state.compatibility?.ok===true?"kontrolované definice souhlasí":journeyAdvisor.state.compatibility?.ok===false?"zjištěná změna — viz Společný plán":"dosud neověřena")}</p><button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
@@ -2493,7 +2494,7 @@ function createSourceUpdater({manifest,fetchSource,digest,loadPreferences=()=>nu
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
     const tabs=[['summary','Přehled'],['journey','Společný plán'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['coverage','Pokrytí výroby'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['factory','Factory Planner'],['market','Trh'],['debug','Debug'],['updates','Aktualizace hry'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v1.3.2 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit</b><small>v1.3.3 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><button data-act="exploredOpen" title="Samostatné okno prozkoumaných systémů">Systémy</button><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
@@ -2584,7 +2585,7 @@ function createSourceUpdater({manifest,fetchSource,digest,loadPreferences=()=>nu
     if(name==='addRequest'||name==='addExport'){addDraft(name==='addRequest'?'request':'export',state.root?.getElementById('panel')?.querySelector('#draft-item')?.value);render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'1.3.2',at:new Date().toISOString(),station:state.stationId,settings:{...logisticsDefaults()},
+    if(name==='exportPlan'){download({version:'1.3.3',at:new Date().toISOString(),station:state.stationId,settings:{...logisticsDefaults()},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,priority:p.priority,group:p.existing?.group??p.group,risk:p.risk,error:p.error}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
