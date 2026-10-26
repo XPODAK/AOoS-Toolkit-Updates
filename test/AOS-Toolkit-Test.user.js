@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AOS Toolkit TEST - Read-only Lab
 // @namespace    https://test.alloutofspace.com/aos-toolkit-test
-// @version      0.2.2
+// @version      0.2.3
 // @description  Full production toolkit port for the test server (CZ)
 // @author       AOS Toolkit
 // @homepageURL  https://github.com/XPODAK/AOoS-Toolkit-Updates
@@ -1283,7 +1283,7 @@ function migrateToolkitStorage(raw,{source='current',legacyPosition=null}={}){
   try{if(typeof raw==='string')value=JSON.parse(raw)}catch{value=null;canSave=source==='legacy';warnings.push('Uložený JSON je neplatný; originál nebyl přepsán.')}
   if(value!==null&&value!==undefined&&!record(value)){value=null;canSave=source==='legacy';warnings.push('Neplatný formát nastavení.')}
   if(record(value)&&value.schemaVersion!==undefined&&value.schemaVersion!==1){canSave=false;warnings.push('Neznámá verze nastavení; ukládání je vypnuté a originál zůstává zachovaný.');value=null}
-  const data={schemaVersion:1,defaultsRevision:2,toolkitVersion:'0.2.2',settings:{...TOOLKIT_DEFAULTS},exploredMinimized:false};
+  const data={schemaVersion:1,defaultsRevision:2,toolkitVersion:'0.2.3',settings:{...TOOLKIT_DEFAULTS},exploredMinimized:false};
   if(record(value?.settings)){
     for(const [k,min,max] of [['importStacks',1,10000],['exportStacks',1,10000],['priority',0,100]])if(Number.isSafeInteger(value.settings[k])&&value.settings[k]>=min&&value.settings[k]<=max)data.settings[k]=value.settings[k];
     if(typeof value.settings.includeCraftedExports==='boolean')data.settings.includeCraftedExports=value.settings.includeCraftedExports;
@@ -1741,7 +1741,7 @@ function createTestConstructionEvidence({now=()=>Date.now()}={}){
   const makeId = (kind,resource) => `${kind}:${resource}`;
   const checked = id => state.selected.has(id);
   const defaultChange = (have,goal) => have===null?'create':have===goal?'same':have<goal?'increase':'decrease';
-  const backup = () => ({version:'0.2.2',at:new Date().toISOString(),station:state.stationId,
+  const backup = () => ({version:'0.2.3',at:new Date().toISOString(),station:state.stationId,
     requestsOn:state.view?.requestsOn,exportsOn:state.view?.exportsOn,groups:state.view?.groups||[],requests:state.view?.requests||[],exports:state.view?.exports||[]});
   function download(json,name){const blob=new Blob([JSON.stringify(json,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),6000)}
   async function api(path,body=undefined){
@@ -2010,10 +2010,6 @@ function createTestConstructionEvidence({now=()=>Date.now()}={}){
     let bodies;
     try{validateView(state.view,state.stationId);bodies=changes.map(payload)}catch(e){state.error=e.message;render();return}
     const stationId=state.stationId,signature=configSignature(state.view);
-    const stationName=state.stations.find(x=>String(x.id)===stationId)?.systemName || 'vybraná stanice';
-    const warning=proposalWarnings().length?'\n'+proposalWarnings().join('\n'):'';
-    if(!confirm(`AOS Toolkit: ${changes.length} změn logistiky na ${stationName} (${stationId}).\n\nZáloha se stáhne jako JSON. Jde o SKUTEČNÉ změny na serveru.${warning}\n\nPokračovat?`))return;
-    if(prompt('Pro potvrzení napiš přesně PROVEST:')!=='PROVEST'){state.notice='Zrušeno';render();return}
     state.processing=true;state.writing=true;productionCoverage.invalidate();journeyAdvisor.invalidate();marketAssistant.invalidate();factoryPlanner.invalidate();accountOverview.invalidate();progressAdvisor.invalidate();state.error='';state.serverLog=[];state.notice='Kontroluji aktuální konfiguraci…';render();
     try{
       const fresh=await api('/api/stations/view?id='+encodeURIComponent(stationId));validateView(fresh,stationId);
@@ -2047,7 +2043,7 @@ function createTestConstructionEvidence({now=()=>Date.now()}={}){
   }
   function diagnostic(){
     const v=state.view||{};
-    return {toolkit:'0.2.2',at:new Date().toISOString(),reference:GAME.version,
+    return {toolkit:'0.2.3',at:new Date().toISOString(),reference:GAME.version,
       compatibility:journeyAdvisor.state.compatibility,storage:{schema:1,canSave:storageMigration.canSave,warnings:storageMigration.warnings},
       connection:{stations:state.loaded,selected:!!state.view,planetGenerator:state.depositStatus},
       counts:{stations:state.stations.length,stock:v.stock?.length||0,requests:v.requests?.length||0,exports:v.exports?.length||0,
@@ -2324,7 +2320,7 @@ function createTestConstructionEvidence({now=()=>Date.now()}={}){
 <li><b>Vyšší budovy spotřebují předchozí tier:</b> 15 receptů nyní vyžaduje také jeden odpovídající kit nižšího tieru (včetně minerů a výrobních strojů). Tier 2 Assembly Bay je výjimka: bezplatná Tier 1 není inventářová položka.</li>
 <li><b>Request a export:</b> nové requesty standardně nemají Open market, pokud jej nezapne preference. Herní UI ukazuje odhad maximální tržní ceny. Sell excess se vztahuje pouze na market; vlastní stanice a inventář znovu respektují Keep pro daný cíl.</li>
 <li><b>Čísla a datum:</b> Settings → Interface nabízí oddělovače čísel, pořadí dne/měsíce a 12/24hodinový čas; automatická volba následuje prohlížeč. Názvy měsíců zůstávají anglicky.</li>
-<li><b>Inventář:</b> Move in / Move out umožňuje při více než čtyřech stanicích filtrovat podle stanice nebo systému.</li></ul><p><b>Toolkit 0.2.2:</b> nové náklady zahrnují Poradce, výrobní pokrytí, Factory Planner, Market Assistant i plán expanze. Aktualizovány reference, kontrola kompatibility a detekce dalších aktualizací (191 JS). Opraveno vyhodnocení známé rezervy exportu do stanic při Sell excess.</p><p>Proběhly automatické testy a audit klientských rozhraní. Ovládání v živé hře a skutečné odesílání pravidel vyžadují následné uživatelské ověření.</p>`)}
+<li><b>Inventář:</b> Move in / Move out umožňuje při více než čtyřech stanicích filtrovat podle stanice nebo systému.</li></ul><p><b>Toolkit 0.2.3:</b> nové náklady zahrnují Poradce, výrobní pokrytí, Factory Planner, Market Assistant i plán expanze. Aktualizovány reference, kontrola kompatibility a detekce dalších aktualizací (191 JS). Opraveno vyhodnocení známé rezervy exportu do stanic při Sell excess.</p><p>Proběhly automatické testy a audit klientských rozhraní. Ovládání v živé hře a skutečné odesílání pravidel vyžadují následné uživatelské ověření.</p>`)}
   function updatesMenu(){const d=sourceUpdater.state;return gameChangesMenu()+wrap(`<b>Update Analyzer · zdroje testovací hry</b><p>Port produkčních modulů. Test: jedna osobní stanice, expanze přes outposty a Construction Ship; čekající stavby zůstávají neověřenou obsazeností. Diagnostika je pod samostatným tlačítkem TEST Diagnostika.</p><p>Porovná SHA-256 dostupných veřejných JS s ${Object.keys(SOURCE_MANIFEST.files).length} auditovanými referencemi této verze Toolkitu. Najde i přímé statické importy nových souborů. Text pouze čte; stažený kód se nespouští.</p><label class="tick"><input id="updates-auto" type="checkbox" ${d.autoEnabled?'checked':''}> Automatická kontrola po otevření hry, nejvýše jednou za 24 hodin v tomto prohlížeči</label><button data-source-updates="check" ${d.busy?'disabled':''}>Zkontrolovat nyní</button><button data-source-updates="cancel" ${d.busy?'':'disabled'}>Zrušit</button><button data-source-updates="download" ${d.snapshot?.files.length?'':'disabled'}>Stáhnout JS ZIP</button><p id="updates-status" role="status">${esc(sourceUpdateStatus())}</p><p>ZIP obsahuje skutečné načtené soubory v references/game-source a manifest s hashi, změnami a případnou neúplností. Použij jej pro kontrolované doplnění referencí soukromého projektu. Herní pravidla ani baseline kompatibility se automaticky nepřepisují.</p>`)+`<section id="updates-details">${sourceUpdateDetails()}</section>`}
   function bindSourceActions(panel){panel.querySelectorAll('[data-source-updates]').forEach(b=>b.addEventListener('click',()=>sourceUpdateAction(b.dataset.sourceUpdates)))}
   function refreshSourceUpdates(){
@@ -2509,15 +2505,15 @@ function createTestConstructionEvidence({now=()=>Date.now()}={}){
     if(['loadMining','miningStation','miningMap'].includes(name)){if(!state.writing)await miningOptimizer.refresh(name==='miningStation'?state.view?.station?.system:name==='miningMap'?debugTools.currentSystemId():miningOptimizer.state.input);return}
     if(name==='cancelMining'){miningOptimizer.cancel();return}
     if(name==='recalculateMining'){miningOptimizer.recalculate();return}
-    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'0.2.2',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
+    if(name==='exportMining'){if(miningOptimizer.state.snapshot)download({version:'0.2.3',...miningOptimizer.state.snapshot},'aos-toolkit-mining-optimizer.json');return}
     if(name==='scan'){if(!state.writing)await galaxyScanner.search({center:scannerCenter()});return}
     if(name==='cancelScan'){galaxyScanner.cancel();return}
     if(name==='scanPrev'||name==='scanNext'){galaxyScanner.state.page+=name==='scanPrev'?-1:1;renderExplored();return}
-    if(name==='exportScan'){download({version:'0.2.2',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
+    if(name==='exportScan'){download({version:'0.2.3',exportedAt:new Date().toISOString(),busy:galaxyScanner.state.busy,error:galaxyScanner.state.error,phase:galaxyScanner.state.phase,notice:galaxyScanner.state.notice,config:galaxyScanner.state.config,origin:galaxyScanner.state.origin,at:galaxyScanner.state.at,complete:galaxyScanner.state.complete,canceled:galaxyScanner.state.canceled,limits:galaxyScanner.state.limits,coverage:{sectors:galaxyScanner.state.sectors,totalSectors:galaxyScanner.state.totalSectors,systems:galaxyScanner.state.visited,failed:galaxyScanner.state.failed,verificationFailed:galaxyScanner.state.verificationFailed},rows:galaxyScanner.state.rows},'aos-toolkit-galaxy-scanner.json');return}
     if(['tabList','tabExpansion','tabScanner','tabMining'].includes(name)){state.exploredTab=name==='tabList'?'list':name==='tabScanner'?'scanner':name==='tabMining'?'mining':'expansion';renderExplored();return}
     if(name==='searchExpansion'){if(expansionAdvisor.state.goalMode==='goal'){await searchGoalExpansion();return}if(!state.writing)await expansionAdvisor.search({originId:state.view?.station?.system||debugTools.currentSystemId()});return}
     if(name==='cancelExpansion'){cancelExpansionWork();renderExplored();return}
-    if(name==='exportExpansion'){download({version:'0.2.2',at:expansionAdvisor.state.at,context:expansionAdvisor.state.context,origin:expansionAdvisor.state.origin,limits:{candidates:expansionAdvisor.state.limited,sites:expansionAdvisor.state.siteLimited},excluded:expansionAdvisor.state.excluded,rows:expansionAdvisor.state.rows},'aos-toolkit-expansion.json');return}
+    if(name==='exportExpansion'){download({version:'0.2.3',at:expansionAdvisor.state.at,context:expansionAdvisor.state.context,origin:expansionAdvisor.state.origin,limits:{candidates:expansionAdvisor.state.limited,sites:expansionAdvisor.state.siteLimited},excluded:expansionAdvisor.state.excluded,rows:expansionAdvisor.state.rows},'aos-toolkit-expansion.json');return}
     if(name==='close'){state.exploredOpened=false;miningOptimizer.cancel();galaxyScanner.cancel();cancelExpansionWork();exploredSystems.cancel();renderExplored();return}
     if(name==='cancel'){exploredSystems.cancel();return}
     if(name==='refresh'){if(!state.writing){invalidateExpansionWork();await exploredSystems.refresh();}return}
@@ -2525,7 +2521,7 @@ function createTestConstructionEvidence({now=()=>Date.now()}={}){
     if(name==='prev')exploredSystems.state.page--;if(name==='next')exploredSystems.state.page++;renderExplored();
   }
   function diagnostics(){
-    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.2.2 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
+    return `${wrap(`<b>Diagnostika a verze</b><p>Toolkit 0.2.3 · herní data ${esc(GAME.version)}. Žádné odesílání mimo alloutofspace.com.</p>
       <p>Stanice: ${state.stations.length}. Generátor: ${esc(state.depositStatus)}. Ložiska: ${state.depositNames.length}. Plán: ${state.plan.length} položek.</p>
       <button data-journey="check">Zkontrolovat herní rozhraní</button><p>${esc(storageMigration.warnings.join(" "))}</p><p>Kompatibilita: ${esc(journeyAdvisor.state.compatibility?.ok===true?"kontrolované definice souhlasí":journeyAdvisor.state.compatibility?.ok===false?"zjištěná změna — viz Společný plán":"dosud neověřena")}</p><button data-act="resetFab">Vrátit tlačítko AOS do rohu</button><button data-act="diag">Exportovat anonymizovanou diagnostiku</button><button data-act="backup">Záloha logistických pravidel</button>`)}
       ${state.serverLog.length?wrap(`<b>Zápisní protokol</b><pre>${esc(JSON.stringify(state.serverLog,null,2))}</pre>`):''}`;
@@ -2546,7 +2542,7 @@ function createTestConstructionEvidence({now=()=>Date.now()}={}){
     const fab=state.root.getElementById('fab'),panel=state.root.getElementById('panel');fab.hidden=state.opened;panel.hidden=!state.opened;
     if(!state.opened)return;
     const tabs=[['summary','Přehled'],['journey','Společný plán'],['resources','Logistika'],['galaxy','Galaxie'],['production','Výroba'],['coverage','Pokrytí výroby'],['proposals','Návrhy'],['account','Účet'],['advisor','Poradce'],['factory','Factory Planner'],['market','Trh'],['debug','Debug'],['updates','Aktualizace hry'],['diag','Diagnostika']];
-    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit TEST</b><small>v0.2.2 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
+    panel.innerHTML=`<header id="drag"><div><b>AOS Toolkit TEST</b><small>v0.2.3 · ${settings.enableWrites?'zápisy POVOLENY':'režim čtení'}</small></div><button data-act="hide" title="Zavřít" aria-label="Zavřít AOS Toolkit">×</button></header>
      <nav><button data-act="exploredOpen" title="Samostatné okno prozkoumaných systémů">Systémy</button><select id="station" aria-label="Stanice" ${state.processing?'disabled':''}><option value="">Vyber stanici</option>${state.stations.map((s,i)=>`<option value="${esc(s.id)}" ${state.stationId===String(s.id)?'selected':''}>${esc(s.systemName||s.name||s.system||'Stanice '+(i+1))}</option>`).join('')}</select>
       <button data-act="refresh" ${state.processing||accountOverview.state.busy||progressAdvisor.state.busy?'disabled':''}>${state.processing?'Načítám…':'Načíst / obnovit'}</button></nav>
      <div class="status">${state.error?`<span class="err">${esc(state.error)}</span>`:esc(state.notice)}</div>
@@ -2637,7 +2633,7 @@ function createTestConstructionEvidence({now=()=>Date.now()}={}){
     if(name==='addRequest'||name==='addExport'){addDraft(name==='addRequest'?'request':'export',state.root?.getElementById('panel')?.querySelector('#draft-item')?.value);render();return}
     if(name==='selectAll'){state.selected=new Set(state.plan.filter(p=>p.modified).map(p=>p.id));render();return}
     if(name==='selectNone'){state.selected.clear();render();return}
-    if(name==='exportPlan'){download({version:'0.2.2',at:new Date().toISOString(),station:state.stationId,settings:{...logisticsDefaults()},
+    if(name==='exportPlan'){download({version:'0.2.3',at:new Date().toISOString(),station:state.stationId,settings:{...logisticsDefaults()},
       selected:state.plan.filter(p=>checked(p.id)).map(p=>({kind:p.kind,item:p.resource,target:p.target,current:p.current,sources:p.source,priority:p.priority,group:p.existing?.group??p.group,risk:p.risk,error:p.error}))},'aos-toolkit-plan.json');return}
     if(name==='backup'){download(backup(),'aos-toolkit-logistics-backup.json');return}
     if(name==='diag'){download(diagnostic(),'aos-toolkit-diagnostika-v0.2.json');return}
@@ -2880,7 +2876,7 @@ const PRODUCTION_MANIFEST = {"format":1,"algorithm":"SHA-256","optionalUnavailab
  const host=document.createElement('div');host.id='aos-test-lab';document.documentElement.append(host);const root=host.attachShadow({mode:'open'});
  root.innerHTML=`<style>
  :host{all:initial;font:13px system-ui;color:#d5eef2;color-scheme:dark}*{box-sizing:border-box}button{font:inherit;background:#174d5b;color:#e0f7fa;border:1px solid #397f8f;border-radius:5px;padding:7px 10px;cursor:pointer}button:hover{background:#216777}button:focus-visible{outline:2px solid #75dfec;outline-offset:2px}button:disabled{cursor:default;background:#203b49;color:#b8d8df;border-color:#486b79}#launch{position:fixed;right:22px;bottom:85px;z-index:2147483646;font-weight:700}#panel{position:fixed;z-index:2147483647;right:22px;top:65px;width:min(650px,94vw);height:min(740px,85vh);min-width:min(330px,94vw);min-height:180px;resize:both;overflow:auto;background:#102733;border:1px solid #397f8f;border-radius:9px;box-shadow:0 9px 32px #0009}#panel[hidden]{display:none}header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px;background:#173c49;position:sticky;top:0;z-index:1}header span{display:flex;gap:5px}header button{width:30px;height:30px;padding:0;display:grid;place-items:center}main{padding:13px}section{border-top:1px solid #315765;padding:12px 0}h2{font-size:15px;margin:0 0 8px}p{line-height:1.5;margin:8px 0}small{color:#a1c8d1}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0b1e27;padding:10px;border-radius:4px;font:12px ui-monospace,monospace}.actions{display:flex;flex-wrap:wrap;gap:6px}.status{color:#9ce2e9}#panel.minimized{height:auto!important;min-height:0;resize:none}#panel.minimized main{display:none}
- </style><button id="launch">TEST Diagnostika</button><article id="panel" hidden aria-label="AOS Toolkit TEST"><header><b>AOS Toolkit TEST · 0.2.2</b><span><button id="minimize" aria-label="Minimalizovat">−</button><button id="close" aria-label="Zavřít">×</button></span></header><main>
+ </style><button id="launch">TEST Diagnostika</button><article id="panel" hidden aria-label="AOS Toolkit TEST"><header><b>AOS Toolkit TEST · 0.2.3</b><span><button id="minimize" aria-label="Minimalizovat">−</button><button id="close" aria-label="Zavřít">×</button></span></header><main>
  <p><b>Testovací laboratoř · pouze čtení</b><br><small>test.alloutofspace.com · samostatný kanál · žádné automatické akce</small></p>
  <section><h2>Veřejné zdroje a rozdíly</h2><p>Porovnání s ${Object.keys(PRODUCTION_MANIFEST.files).length} referencemi produkčního Toolkitu 1.3.0. Dohledá doslovné JS importy včetně combat vstupu s cache query. Zdrojový text se nespouští ani nepřijímá jako nová pravidla.</p><div class="actions"><button id="sources">Načíst testovací JS</button><button id="stop-sources" disabled>Zrušit sběr</button><button id="zip" disabled>Stáhnout JS ZIP</button></div><p id="source-status" class="status" role="status">Sběr zatím nebyl spuštěn.</p><pre id="source-details" hidden></pre></section>
  <section><h2>Konfigurace a diagnostika</h2><p>Ručně přečte konfiguraci, tři stávající přehledy účtu a při potvrzeném zapnutí combatu pět combat přehledů (lodě, flotily, bitvy, stavba, nepřátelé). Výsledek obsahuje příznaky funkcí, HTTP stav, typy a počty záznamů. Jména, ID, zásoby ani jiné hodnoty účtu se neukládají. Pro přehledy účtu se přihlas běžným způsobem do hry.</p><div class="actions"><button id="diagnostics">Přečíst diagnostiku</button><button id="stop-diagnostics" disabled>Zrušit čtení</button><button id="report" disabled>Stáhnout diagnostický JSON</button></div><p id="diagnostic-status" class="status" role="status">Žádné požadavky zatím neproběhly.</p><pre id="diagnostic-details" hidden></pre></section>
@@ -2908,7 +2904,7 @@ const PRODUCTION_MANIFEST = {"format":1,"algorithm":"SHA-256","optionalUnavailab
  el('zip').addEventListener('click',()=>{const snap=sources.state.snapshot;if(sources.state.busy||!snap?.files.length)return;download('aos-test-sources-'+snap.at.replace(/[:.]/g,'-')+'.zip',new Blob([makeSourceZip(snap)],{type:'application/zip'}))});
  el('diagnostics').addEventListener('click',async()=>{if(sources.state.busy||diagnostics.state.busy)return;const ticket=++reportGeneration;report=null;const next=await diagnostics.run();if(ticket===reportGeneration){report=next;refresh()}});
  el('stop-diagnostics').addEventListener('click',()=>{diagnostics.cancel();reportGeneration++;report=null;refresh()});
- el('report').addEventListener('click',()=>{if(!report||sources.state.busy||diagnostics.state.busy)return;download('aos-test-diagnostics-'+report.at.replace(/[:.]/g,'-')+'.json',new Blob([JSON.stringify({toolkit:'AOS Toolkit TEST',version:'0.2.2',...report},null,2)],{type:'application/json'}))});
+ el('report').addEventListener('click',()=>{if(!report||sources.state.busy||diagnostics.state.busy)return;download('aos-test-diagnostics-'+report.at.replace(/[:.]/g,'-')+'.json',new Blob([JSON.stringify({toolkit:'AOS Toolkit TEST',version:'0.2.3',...report},null,2)],{type:'application/json'}))});
 })();
 
 })();
